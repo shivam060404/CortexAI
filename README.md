@@ -13,6 +13,21 @@ Deep Research is an advanced research assistant that leverages multiple speciali
 - **Automated Analysis**: Synthesizes findings and extracts key insights
 - **Report Generation**: Creates well-structured research reports with proper citations
 
+### 🚀 Advanced Agentic Capabilities
+
+- **Python Execution Sandbox**: Secure, timeout-bound environment for the agent to run Python scripts, perform statistical analysis, and render Matplotlib charts directly in the workspace.
+- **Multi-Agent Debate Engine**: Eliminates confirmation bias by spawning Defender and Skeptic sub-agents to rigorously debate nuanced topics over multiple rounds before synthesizing a conclusion.
+- **Background Watcher**: Asynchronous APScheduler integration allowing the agent to wake up periodically, perform incremental research, and update knowledge graphs without user intervention.
+- **Global Institutional Memory**: Advanced Knowledge Graph integration that persists facts across user sessions, creating a permanent, shared institutional memory.
+- **Automated PPTX Deliverables**: Automatically converts comprehensive markdown research reports into corporate-ready PowerPoint presentations.
+
+### 🛡️ 3-Layer Security & Guardrails (OWASP LLM Top 10 Protected)
+
+- **Layer 1 (Input Guard)**: Scans and neutralizes malicious user inputs at the WebSocket entry point before they reach the LLM.
+- **Layer 2 (Tool Output Guard)**: Detects and sanitizes indirect prompt injections from scraped web content during the research loop.
+- **Layer 3 (LLM Output Guard)**: Moderates the AI's generated responses to block harmful content categories (weapons, illegal acts, self-harm) before streaming to the user.
+- **Additional Defenses**: Real-time PII Redaction, URL Citation Verification (prevents hallucinated links), and Semantic Scope Drift Detection.
+
 ## 🏗️ Architecture
 
 ### Backend
