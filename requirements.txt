@@ -1,10 +1,35 @@
+# --- Core ---
 fastapi
-uvicorn
+uvicorn[standard]
 websockets
-langchain
-tavily-python
 python-dotenv
+pydantic-settings
+
+# --- LangChain / LLM ---
+langchain
 langchain-core
 langchain-mistralai
 langchain-tavily
 langgraph
+
+# --- Database ---
+sqlalchemy[asyncio]
+asyncpg
+alembic
+chromadb
+langchain-chroma
+
+# --- Cache ---
+redis
+
+# --- Observability ---
+structlog
+
+# --- Resilience ---
+tenacity
+
+# --- Advanced Features ---
+apscheduler
+python-pptx
+matplotlib
+pandas
