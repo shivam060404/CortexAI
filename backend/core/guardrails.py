@@ -12,8 +12,17 @@ from typing import Set, Tuple
 from dataclasses import dataclass
 from backend.core.logger import get_logger
 from backend.config import settings
+import importlib.util
 
 logger = get_logger(__name__)
+
+_encoder = None
+def get_encoder():
+    global _encoder
+    if _encoder is None and importlib.util.find_spec("semantic_router"):
+        from semantic_router.encoders import HuggingFaceEncoder
+        _encoder = HuggingFaceEncoder()
+    return _encoder
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -300,23 +309,33 @@ def verify_citations(report_markdown: str, accessed_urls: Set[str]) -> Tuple[str
 # ═══════════════════════════════════════════════════════════════════════
 
 def check_scope_drift(query: str, recent_actions: list[str]) -> bool:
-    """Simple heuristic to check if the agent is drifting completely off-topic.
-    True = agent has drifted.
-    """
-    if not recent_actions:
+    """Semantic Router based scope drift detection."""
+    if not recent_actions or len(recent_actions) < 3:
         return False
         
-    query_words = set(re.findall(r'\w+', query.lower()))
-    if len(query_words) < 3:
+    try:
+        from semantic_router import Route, RouteLayer
+        encoder = get_encoder()
+        if not encoder:
+            return False
+            
+        target_route = Route(
+            name="core_topic",
+            utterances=[query, f"{query} research", f"information about {query}"]
+        )
+        
+        layer = RouteLayer(encoder=encoder, routes=[target_route])
+        
+        # Check the most recent actions
+        action_text = " ".join(recent_actions[-3:])
+        route_choice = layer(action_text)
+        
+        # If the recent actions don't map back to the core topic route, it's drifting
+        if not route_choice or route_choice.name != "core_topic":
+            logger.warning("semantic_scope_drift_detected", query=query[:50])
+            return True
+            
         return False
-        
-    action_text = " ".join(recent_actions).lower()
-    action_words = set(re.findall(r'\w+', action_text))
-    
-    overlap = len(query_words.intersection(action_words))
-    
-    if overlap == 0 and len(recent_actions) >= 3:
-        logger.warning("scope_drift_detected", query=query[:50])
-        return True
-        
-    return False
+    except Exception as e:
+        logger.error("semantic_router_error", error=str(e))
+        return False

@@ -10,25 +10,33 @@ langchain
 langchain-core
 langchain-mistralai
 langchain-tavily
+langchain-community
+litellm
 langgraph
 
 # --- Database ---
 sqlalchemy[asyncio]
 asyncpg
 alembic
-chromadb
-langchain-chroma
+lancedb
 
 # --- Cache ---
 redis
 
-# --- Observability ---
+# --- Observability & Tracing ---
 structlog
+arize-phoenix
+openinference-instrumentation-langchain
+openinference-instrumentation-litellm
+
+# --- Trust & Security ---
+semantic-router
 
 # --- Resilience ---
 tenacity
 
 # --- Advanced Features ---
+pydantic-ai
 apscheduler
 python-pptx
 matplotlib

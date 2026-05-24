@@ -5,7 +5,7 @@ The agent uses this to critically review its own work before presenting results.
 
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_community.chat_models import ChatLiteLLM
 from backend.config import settings
 from backend.core.logger import get_logger
 
@@ -28,9 +28,8 @@ def get_reflection_tools(session_id: str):
             A structured self-evaluation with confidence scores and improvement suggestions.
         """
         logger.info("self_reflect", session_id=session_id)
-        llm = ChatMistralAI(
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            model=settings.LLM_MODEL,
+        llm = ChatLiteLLM(
+            model=settings.FAST_MODEL,
             temperature=0.3,
         )
         messages = [
@@ -72,9 +71,8 @@ def get_reflection_tools(session_id: str):
             - UNVERIFIED/NUANCE (isolated claims or gaps)
         """
         logger.info("cross_reference_sources", session_id=session_id)
-        llm = ChatMistralAI(
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            model=settings.LLM_MODEL,
+        llm = ChatLiteLLM(
+            model=settings.FAST_MODEL,
             temperature=0.1,
         )
         messages = [

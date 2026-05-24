@@ -17,10 +17,10 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown events."""
     logger.info("app_startup", cors_origins=settings.CORS_ORIGINS)
 
-    # Create workspace and ChromaDB data dirs
+    # Create workspace and LanceDB data dirs
     import os
     os.makedirs(settings.WORKSPACE_ROOT, exist_ok=True)
-    os.makedirs(settings.CHROMA_PERSIST_DIR, exist_ok=True)
+    os.makedirs(settings.LANCEDB_PERSIST_DIR, exist_ok=True)
 
     # Try to initialize PostgreSQL tables (graceful if DB not available)
     try:
@@ -52,6 +52,34 @@ def create_app() -> FastAPI:
         version="2.0.0",
         lifespan=lifespan,
     )
+
+    # Setup Arize Phoenix Observability
+    try:
+        import phoenix as px
+        from openinference.instrumentation.langchain import LangChainInstrumentor
+        from openinference.instrumentation.litellm import LiteLLMInstrumentor
+        from opentelemetry import trace as trace_api
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk import trace as trace_sdk
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+        # Launch Phoenix local server (runs on port 6006 by default)
+        px.launch_app()
+        
+        # Connect OTEL to Phoenix
+        endpoint = "http://127.0.0.1:6006/v1/traces"
+        tracer_provider = trace_sdk.TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint)))
+        trace_api.set_tracer_provider(tracer_provider)
+        
+        # Instrument LLM libraries
+        LangChainInstrumentor().instrument()
+        LiteLLMInstrumentor().instrument()
+        logger.info("phoenix_observability_enabled")
+    except ImportError as e:
+        logger.warning("phoenix_not_installed", error=str(e))
+    except Exception as e:
+        logger.error("phoenix_setup_failed", error=str(e))
 
     # CORS
     app.add_middleware(

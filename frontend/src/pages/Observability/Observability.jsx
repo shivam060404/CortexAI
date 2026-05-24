@@ -23,6 +23,7 @@ export default function Observability() {
   const [traces, setTraces] = useState([]);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ totalLatency: 0, totalTokens: 0, errors: 0, toolCalls: 0 });
+  const [showPhoenix, setShowPhoenix] = useState(false);
 
   useEffect(() => {
     listSessions()
@@ -71,7 +72,24 @@ export default function Observability() {
             </option>
           ))}
         </select>
+        <button 
+          className="btn btn-primary" 
+          onClick={() => setShowPhoenix(!showPhoenix)}
+          style={{ marginLeft: 16 }}
+        >
+          {showPhoenix ? 'Hide Phoenix UI' : 'Open Phoenix Traces'}
+        </button>
       </div>
+
+      {showPhoenix && (
+        <div className="card" style={{ padding: 0, height: '70vh', marginBottom: 24, overflow: 'hidden' }}>
+          <iframe 
+            src="http://localhost:6006" 
+            title="Arize Phoenix"
+            style={{ width: '100%', height: '100%', border: 'none' }}
+          />
+        </div>
+      )}
 
       {/* Stats Row */}
       <div className="grid grid-4" style={{ marginBottom: 24 }}>

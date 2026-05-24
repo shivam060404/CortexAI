@@ -4,7 +4,7 @@ Research Loop Tools — explicit tools for recursive hypothesis generation and e
 
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_community.chat_models import ChatLiteLLM
 from backend.config import settings
 from backend.core.logger import get_logger
 
@@ -17,9 +17,8 @@ def get_research_loop_tools(session_id: str):
     async def generate_hypothesis(current_findings: str) -> str:
         """Analyze current findings and generate a new testable hypothesis to drive the next phase of research."""
         logger.info("generate_hypothesis", session_id=session_id)
-        llm = ChatMistralAI(
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            model=settings.LLM_MODEL,
+        llm = ChatLiteLLM(
+            model=settings.FAST_MODEL,
             temperature=0.7,
         )
         messages = [
@@ -37,9 +36,8 @@ def get_research_loop_tools(session_id: str):
     async def evaluate_findings(hypothesis: str, findings: str) -> str:
         """Evaluate how well the current findings support the given hypothesis."""
         logger.info("evaluate_findings", session_id=session_id)
-        llm = ChatMistralAI(
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            model=settings.LLM_MODEL,
+        llm = ChatLiteLLM(
+            model=settings.FAST_MODEL,
             temperature=0.2,
         )
         messages = [

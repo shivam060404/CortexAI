@@ -5,7 +5,7 @@ This runs BEFORE the agent starts planning — the RLHF alignment core.
 """
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_community.chat_models import ChatLiteLLM
 from backend.config import settings
 from backend.core.logger import get_logger
 
@@ -102,9 +102,8 @@ async def align_query(query: str, mode: str = "deep", user_prefs: dict | None = 
         if pref_parts:
             prefs_text = "\n".join(pref_parts)
 
-    llm = ChatMistralAI(
-        mistral_api_key=settings.MISTRAL_API_KEY,
-        model=settings.LLM_MODEL,
+    llm = ChatLiteLLM(
+        model=settings.FAST_MODEL,
         temperature=0.2,
     )
 

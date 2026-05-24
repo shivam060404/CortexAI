@@ -7,7 +7,8 @@ Supports both sequential and parallel sub-agent execution.
 import asyncio
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_mistralai.chat_models import ChatMistralAI
+from pydantic_ai import Agent
+from pydantic import BaseModel, Field
 from backend.config import settings
 from backend.core.execution_guard import ExecutionGuard, ExecutionLimitExceeded
 from backend.core.logger import get_logger
@@ -41,6 +42,11 @@ ROLE_PROMPTS = {
 }
 
 
+class SubAgentResult(BaseModel):
+    summary: str = Field(description="A concise, well-structured summary of the findings.")
+    key_findings: list[str] = Field(description="List of key facts, numbers, or critical points.")
+    confidence_score: float = Field(description="Confidence in the findings from 0.0 to 1.0.")
+
 async def _run_single_subagent(session_id: str, task_description: str, agent_role: str) -> str:
     """Internal: run a single sub-agent with its own resource budget."""
     guard = ExecutionGuard(
@@ -53,29 +59,33 @@ async def _run_single_subagent(session_id: str, task_description: str, agent_rol
 
     try:
         guard.check()
-        llm = ChatMistralAI(
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            model=settings.LLM_MODEL,
-            temperature=settings.LLM_TEMPERATURE,
-            max_tokens=settings.SUBAGENT_MAX_TOKENS,
+        
+        # Format model name for PydanticAI (e.g. groq/llama3... -> groq:llama3...)
+        model_id = settings.FAST_MODEL.replace("/", ":")
+        
+        agent = Agent(
+            model_id,
+            result_type=SubAgentResult,
+            system_prompt=system_prompt,
         )
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Task: {task_description}"),
-        ]
-
-        response = await llm.ainvoke(messages)
+        response = await agent.run(task_description)
         guard.record_iteration()
-
-        tokens = getattr(response, 'usage_metadata', {})
-        if tokens:
-            guard.record_tokens(tokens.get('total_tokens', 0))
+        
+        # Note: accurate token tracking via PydanticAI can be pulled from response.usage
+        if hasattr(response, 'usage') and response.usage:
+            guard.record_tokens(response.usage.total_tokens or 0)
 
         logger.info("subagent_complete", session_id=session_id,
                      role=agent_role, metrics=guard.metrics())
 
-        return f"[Sub-agent: {agent_role}]\n{response.content}"
+        formatted_result = (
+            f"Summary:\n{response.data.summary}\n\n"
+            f"Key Findings:\n" + "\n".join(f"- {f}" for f in response.data.key_findings) +
+            f"\n\nConfidence: {response.data.confidence_score}"
+        )
+
+        return f"[Sub-agent: {agent_role}]\n{formatted_result}"
 
     except ExecutionLimitExceeded as e:
         logger.warning("subagent_limit_exceeded", session_id=session_id,

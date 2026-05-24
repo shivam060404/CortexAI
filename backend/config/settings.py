@@ -14,8 +14,15 @@ class Settings(BaseSettings):
 
     # --- LLM Provider ---
     MISTRAL_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
+    
+    # Legacy fallbacks
     LLM_MODEL: str = "mistral-large-latest"
     LLM_TEMPERATURE: float = 0.0
+
+    # Tiered Routing
+    ORCHESTRATOR_MODEL: str = "mistral/mistral-large-latest"
+    FAST_MODEL: str = "groq/llama3-8b-8192"
 
     # --- Search ---
     TAVILY_API_KEY: str = ""
@@ -23,8 +30,8 @@ class Settings(BaseSettings):
     # --- Database ---
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/cortexai"
 
-    # --- ChromaDB ---
-    CHROMA_PERSIST_DIR: str = "./data/chromadb"
+    # --- LanceDB ---
+    LANCEDB_PERSIST_DIR: str = "./data/lancedb"
 
     # --- Redis ---
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -57,13 +64,13 @@ class Settings(BaseSettings):
         # Research loop tools
         "generate_hypothesis", "evaluate_findings",
         # Knowledge graph tools
-        "add_to_knowledge_graph", "query_knowledge_graph",
+        "extract_and_store_knowledge", "query_community_knowledge",
         # Experiment tracking tools
         "log_experiment",
         # Reflection tools
         "self_reflect", "cross_reference_sources",
         # Advanced Features
-        "execute_python_script", "run_debate", "generate_presentation"
+        "execute_code_agent_task", "run_debate", "generate_presentation"
     ])
 
     # --- CORS ---
@@ -94,3 +101,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+if settings.MISTRAL_API_KEY:
+    os.environ["MISTRAL_API_KEY"] = settings.MISTRAL_API_KEY
+if settings.GROQ_API_KEY:
+    os.environ["GROQ_API_KEY"] = settings.GROQ_API_KEY

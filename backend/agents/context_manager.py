@@ -7,7 +7,7 @@ and stores full context in ChromaDB for retrieval.
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_mistralai.chat_models import ChatMistralAI
 from backend.config import settings
-from backend.db.chromadb_store import ChromaStore
+from backend.db.lancedb_store import LanceDBStore
 from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,7 +21,7 @@ class ContextManager:
 
     def __init__(self, session_id: str):
         self.session_id = session_id
-        self.chroma = ChromaStore()
+        self.lancedb = LanceDBStore()
         self.llm = ChatMistralAI(
             mistral_api_key=settings.MISTRAL_API_KEY,
             model=settings.LLM_MODEL,
@@ -62,7 +62,7 @@ class ContextManager:
         # Store older messages in ChromaDB for future retrieval
         older_texts = [m.content for m in older if hasattr(m, 'content') and m.content]
         if older_texts:
-            self.chroma.add_documents(self.session_id, older_texts)
+            self.lancedb.add_documents(self.session_id, older_texts)
 
         # Generate summary of older messages
         summary_prompt = (
@@ -87,8 +87,8 @@ class ContextManager:
             return system_msgs + recent
 
     def retrieve_relevant(self, query: str, n_results: int = 5) -> str:
-        """Retrieve relevant past context from ChromaDB for a given query."""
-        results = self.chroma.semantic_search(self.session_id, query, n_results)
+        """Retrieve relevant past context from LanceDB for a given query."""
+        results = self.lancedb.semantic_search(self.session_id, query, n_results)
         if not results:
             return ""
         context_parts = [r["content"] for r in results]

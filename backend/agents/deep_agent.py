@@ -3,7 +3,7 @@ Deep Agent — core research agent factory.
 Creates a LangGraph ReAct-style agent with all tools, ExecutionGuard, and ToolPermissionGuard.
 """
 
-from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_community.chat_models import ChatLiteLLM
 from backend.config import settings
 from backend.tools.search_tools import get_search_tools
 from backend.tools.fs_tools import get_fs_tools
@@ -56,9 +56,8 @@ def create_research_agent(session_id: str, user_memory_context: str = ""):
     )
 
     # Create LLM with tools bound
-    llm = ChatMistralAI(
-        mistral_api_key=settings.MISTRAL_API_KEY,
-        model=settings.LLM_MODEL,
+    llm = ChatLiteLLM(
+        model=settings.ORCHESTRATOR_MODEL,
         temperature=settings.LLM_TEMPERATURE,
     )
 

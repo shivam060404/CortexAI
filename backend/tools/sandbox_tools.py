@@ -16,12 +16,12 @@ def get_sandbox_tools(session_id: str) -> list:
     """Return sandbox tools bound to a specific session workspace."""
 
     @tool
-    def execute_python_script(code: str, filename: str = "script.py") -> str:
+    def execute_code_agent_task(code: str, filename: str = "agent_task.py") -> str:
         """
-        Write and execute a Python script in your local workspace sandbox.
-        Use this for data visualization, statistical analysis, or parsing CSVs.
-        If generating charts (matplotlib, etc), save them to the local directory (e.g., 'chart.png').
-        Returns the stdout and stderr console output of the script execution.
+        Smolagents-style Code-Driven Execution Sandbox.
+        Write a complete Python script to systematically derive an answer, download data, or analyze logic.
+        You MUST print() the final answer to standard output so it can be captured by the orchestrator.
+        If generating charts, save them to the local directory (e.g., 'chart.png').
         """
         try:
             # Enforce clean filename and ensure workspace exists
@@ -60,4 +60,4 @@ def get_sandbox_tools(session_id: str) -> list:
         except Exception as e:
             return f"Error executing script: {e}"
 
-    return [execute_python_script]
+    return [execute_code_agent_task]

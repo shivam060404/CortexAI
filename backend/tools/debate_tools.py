@@ -6,7 +6,7 @@ All calls are fully async to prevent blocking the FastAPI event loop.
 
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_community.chat_models import ChatLiteLLM
 from backend.config import settings
 from backend.core.logger import get_logger
 
@@ -46,15 +46,13 @@ def get_debate_tools(session_id: str) -> list:
         logger.info("debate_started", session_id=session_id, topic=topic[:80])
         
         # Initialize isolated models for the debate
-        pro_agent = ChatMistralAI(
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            model=settings.LLM_MODEL,
+        pro_agent = ChatLiteLLM(
+            model=settings.FAST_MODEL,
             temperature=0.7, # Higher temp for more creative argumentation
         )
         
-        con_agent = ChatMistralAI(
-            mistral_api_key=settings.MISTRAL_API_KEY,
-            model=settings.LLM_MODEL,
+        con_agent = ChatLiteLLM(
+            model=settings.FAST_MODEL,
             temperature=0.7,
         )
         
