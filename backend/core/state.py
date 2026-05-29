@@ -16,3 +16,6 @@ class AgentState(TypedDict):
     iteration: int
     consecutive_failures: int
     accessed_urls: Annotated[set[str], lambda x, y: x | y]
+    hitl_mode: str  # "auto", "supervised", "collaborative"
+    pending_approval: dict | None
+    user_modifications: list[dict]

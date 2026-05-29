@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CortexAI</title>
+  <style>
+    body {
+      width: 320px;
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #0f0f13;
+      color: #e0e0e8;
+    }
+    h2 {
+      margin-top: 0;
+      font-size: 1.2rem;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .logo {
+      color: #7c3aed;
+      font-size: 1.4rem;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      margin-bottom: 4px;
+      color: #a1a1aa;
+    }
+    input[type="text"], textarea, select {
+      width: 100%;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #3f3f46;
+      background-color: #18181b;
+      color: #fff;
+      box-sizing: border-box;
+      font-family: inherit;
+    }
+    input[type="text"]:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: #7c3aed;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      background-color: #7c3aed;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    button:hover {
+      background-color: #6d28d9;
+    }
+    button:disabled {
+      background-color: #3f3f46;
+      cursor: not-allowed;
+    }
+    .status {
+      margin-top: 12px;
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .status.success { color: #10b981; }
+    .status.error { color: #ef4444; }
+    .status.loading { color: #3b82f6; }
+    
+    .settings-link {
+      display: block;
+      text-align: center;
+      margin-top: 16px;
+      font-size: 0.8rem;
+      color: #a1a1aa;
+      text-decoration: none;
+    }
+    .settings-link:hover {
+      color: #fff;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <h2><span class="logo">◈</span> CortexAI</h2>
+  
+  <div class="form-group">
+    <label for="session-id">Research Session ID</label>
+    <input type="text" id="session-id" placeholder="Optional (leave blank for default)" />
+  </div>
+
+  <div class="form-group">
+    <label for="tags">Tags (comma separated)</label>
+    <input type="text" id="tags" placeholder="e.g. competitor, pricing, feature" />
+  </div>
+  
+  <div class="form-group">
+    <label for="note">Quick Note (optional)</label>
+    <textarea id="note" rows="2" placeholder="Why is this page important?"></textarea>
+  </div>
+
+  <button id="inject-btn">Inject Page into CortexAI</button>
+  
+  <div id="status" class="status"></div>
+  
+  <a href="#" id="options-link" class="settings-link">⚙️ Extension Settings</a>
+
+  <script src="popup.js"></script>
+</body>
+</html>

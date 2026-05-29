@@ -2,6 +2,10 @@ import { useState, useRef, useEffect } from 'react';
 import { ResearchWebSocket } from '../../services/websocket';
 import { createSession, submitFeedback, alignQuery } from '../../services/api';
 import { marked } from 'marked';
+import ReportViewer from '../../components/ReportViewer/ReportViewer';
+import ImageDropzone from '../../components/ImageDropzone/ImageDropzone';
+import LivePlanEditor from '../../components/LivePlanEditor/LivePlanEditor';
+import TaggingSystem from '../../components/TaggingSystem/TaggingSystem';
 import './Research.css';
 
 // Parse sources from tool results
@@ -80,6 +84,12 @@ export default function Research() {
   const [showFeedback, setShowFeedback] = useState(false);
   const [clarificationData, setClarificationData] = useState(null);
   const [clarificationInput, setClarificationInput] = useState('');
+  
+  // New State for Phase 7
+  const [queryTags, setQueryTags] = useState([]);
+  const [queryImage, setQueryImage] = useState(null);
+  const [queryImageName, setQueryImageName] = useState('');
+
   const timerRef = useRef(null);
   const eventsEndRef = useRef(null);
   const wsRef = useRef(null);
@@ -151,7 +161,13 @@ export default function Research() {
       const ws = new ResearchWebSocket(session.id, {
         onOpen: () => {
           setStatus('running');
-          ws.send(JSON.stringify({ query: finalQuery, mode: mode }));
+          // Include tags and image if present
+          ws.send(JSON.stringify({ 
+            query: finalQuery, 
+            mode: mode,
+            tags: queryTags,
+            image_data: queryImage 
+          }));
         },
         onEvent: (event) => {
           setEvents(prev => [...prev, { ...event, timestamp: Date.now() }]);
@@ -196,6 +212,7 @@ export default function Research() {
   const searchCount = events.filter(e => e.type === 'tool_call' && e.data?.tool?.includes('search')).length;
   const thinkingEvents = events.filter(e => ['thinking', 'tool_call', 'tool_result', 'status'].includes(e.type));
   const reportHtml = finalReport ? marked.parse(injectCitations(finalReport, sources)) : '';
+  const charts = events.filter(e => e.type === 'chart_data').map(e => e.data);
 
   // ─── IDLE STATE: Perplexity-style centered input ───
   if (status === 'idle') {
@@ -222,11 +239,25 @@ export default function Research() {
             <button
               className="landing-submit"
               onClick={() => startResearch()}
-              disabled={!query.trim()}
+              disabled={!query.trim() && !queryImage}
               id="start-research-btn"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
             </button>
+          </div>
+          
+          <div className="advanced-inputs">
+            <TaggingSystem tags={queryTags} onTagsChange={setQueryTags} />
+            <ImageDropzone onImageDrop={(data, name) => {
+              setQueryImage(data);
+              setQueryImageName(name);
+            }} />
+            {queryImage && (
+              <div className="image-preview">
+                <span className="image-name">📎 {queryImageName}</span>
+                <button className="remove-image" onClick={() => { setQueryImage(null); setQueryImageName(''); }}>×</button>
+              </div>
+            )}
           </div>
 
           {/* Research Mode Selector */}
@@ -396,32 +427,34 @@ export default function Research() {
 
           {/* Research Plan (Todos) */}
           {todos.length > 0 && (
-            <div className="research-plan">
-              <h4 className="plan-title">Research Plan</h4>
-              <div className="plan-items">
-                {todos.map((todo, i) => (
-                  <div key={i} className={`plan-item plan-${todo.status}`}>
-                    <span className="plan-check">
-                      {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? <span className="mini-spinner" /> : todo.status === 'failed' ? '✕' : '○'}
-                    </span>
-                    <span className="plan-text">{todo.text}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <LivePlanEditor 
+              todos={todos} 
+              onUpdatePlan={(newTodos) => {
+                setTodos(newTodos);
+                // Send plan edit back to websocket to resume HITL or update agent context
+                if (wsRef.current && status === 'running') {
+                  wsRef.current.send(JSON.stringify({
+                    type: 'hitl_resume',
+                    data: {
+                      action: 'update_plan',
+                      modifications: { todos: newTodos }
+                    }
+                  }));
+                }
+              }} 
+            />
           )}
 
           {/* Final Report */}
           {finalReport && (
-            <div className="report-container">
-              <div className="report-header">
-                <h3>Research Report</h3>
-                <div className="report-actions">
-                  <button className="btn-icon" onClick={() => navigator.clipboard.writeText(finalReport)} title="Copy">📋</button>
-                </div>
-              </div>
-              <div className="report-body" dangerouslySetInnerHTML={{ __html: reportHtml }} />
-            </div>
+            <ReportViewer 
+              htmlContent={reportHtml} 
+              charts={charts} 
+              title={query.length > 50 ? query.substring(0, 50) + "..." : query}
+              onExportPDF={() => { alert("Generating PDF... (MCP Backend will process this)"); }}
+              onExportPPTX={() => { alert("Generating PPTX... (MCP Backend will process this)"); }}
+              onExportHTML={() => { alert("Generating Interactive HTML... (MCP Backend will process this)"); }}
+            />
           )}
 
           {/* Still researching indicator */}

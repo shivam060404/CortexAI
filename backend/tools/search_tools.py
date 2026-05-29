@@ -3,7 +3,7 @@ Search tools — TavilySearch with Redis caching and retry logic.
 """
 
 from langchain_core.tools import tool
-from langchain_tavily import TavilySearch
+from langchain_community.tools.tavily_search import TavilySearchResults as TavilySearch
 from backend.db.cache import CacheManager
 from backend.core.retry import retry_with_backoff, CircuitBreaker
 from backend.core.logger import get_logger
@@ -75,7 +75,12 @@ def _make_cached_search(name: str, description: str):
 
 
 def get_search_tools():
-    """Return the list of search tools."""
+    """Return the list of search tools.
+    If MCP is enabled, we rely on the MCP search server instead of built-in tools.
+    """
+    if getattr(settings, "MCP_ENABLED", False):
+        return []
+
     return [
         _make_cached_search(
             "web_search",

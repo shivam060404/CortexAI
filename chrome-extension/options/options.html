@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CortexAI Options</title>
+  <style>
+    body {
+      width: 400px;
+      margin: 0 auto;
+      padding: 32px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #0f0f13;
+      color: #e0e0e8;
+    }
+    h1 {
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo { color: #7c3aed; }
+    .form-group { margin-bottom: 20px; }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+    .help-text {
+      font-size: 0.85rem;
+      color: #a1a1aa;
+      margin-bottom: 8px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #3f3f46;
+      background-color: #18181b;
+      color: #fff;
+      box-sizing: border-box;
+      font-size: 1rem;
+    }
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      background-color: #7c3aed;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    button:hover { background-color: #6d28d9; }
+    #status {
+      margin-top: 16px;
+      color: #10b981;
+    }
+  </style>
+</head>
+<body>
+  <h1><span class="logo">◈</span> CortexAI Settings</h1>
+  
+  <div class="form-group">
+    <label for="server-url">CortexAI Backend URL</label>
+    <div class="help-text">The URL where your CortexAI FastAPI server is running.</div>
+    <input type="text" id="server-url" placeholder="http://localhost:8000" />
+  </div>
+
+  <button id="save-btn">Save Settings</button>
+  <div id="status"></div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const serverUrlInput = document.getElementById('server-url');
+      const saveBtn = document.getElementById('save-btn');
+      const statusEl = document.getElementById('status');
+
+      chrome.storage.local.get(['serverUrl'], (res) => {
+        if (res.serverUrl) serverUrlInput.value = res.serverUrl;
+      });
+
+      saveBtn.addEventListener('click', () => {
+        const serverUrl = serverUrlInput.value.trim();
+        chrome.storage.local.set({ serverUrl }, () => {
+          statusEl.textContent = 'Settings saved!';
+          setTimeout(() => { statusEl.textContent = ''; }, 2000);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

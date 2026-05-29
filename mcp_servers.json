@@ -1,0 +1,44 @@
+{
+  "version": "1.0.0",
+  "description": "CortexAI MCP Server Configuration — Docker Compose (local/same machine)",
+  "servers": {
+    "search": {
+      "command": "python",
+      "args": ["-m", "backend.mcp.servers.search_server"],
+      "transport": "stdio",
+      "enabled": true,
+      "auto_start": true,
+      "env": {},
+      "health_check_interval": 60
+    },
+    "browser": {
+      "command": "python",
+      "args": ["-m", "backend.mcp.servers.browser_server"],
+      "transport": "stdio",
+      "enabled": true,
+      "auto_start": true,
+      "env": {
+        "BROWSER_HEADLESS": "true"
+      },
+      "health_check_interval": 120
+    },
+    "data": {
+      "command": "python",
+      "args": ["-m", "backend.mcp.servers.data_server"],
+      "transport": "stdio",
+      "enabled": true,
+      "auto_start": true,
+      "env": {},
+      "health_check_interval": 60
+    },
+    "export": {
+      "command": "python",
+      "args": ["-m", "backend.mcp.servers.export_server"],
+      "transport": "stdio",
+      "enabled": true,
+      "auto_start": true,
+      "env": {},
+      "health_check_interval": 120
+    }
+  }
+}

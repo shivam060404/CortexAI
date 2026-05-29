@@ -1,0 +1,28 @@
+.image-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+  background-color: rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  margin-top: 1rem;
+  cursor: pointer;
+}
+
+.image-dropzone.active {
+  border-color: var(--accent);
+  background-color: rgba(124, 58, 237, 0.1);
+}
+
+.dropzone-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.image-dropzone:hover .dropzone-content {
+  color: var(--text);
+}

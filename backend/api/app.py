@@ -3,11 +3,13 @@ FastAPI application factory — CORS, lifespan, router registration.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
 from backend.core.logger import get_logger
+from backend.api.routes import router
+from backend.api.middleware import rate_limit_middleware
 
 logger = get_logger(__name__)
 
@@ -35,11 +37,21 @@ async def lifespan(app: FastAPI):
         # Start background job scheduler
         from backend.core.scheduler import start_scheduler
         start_scheduler()
+        
+        # Start MCP servers
+        if settings.MCP_ENABLED:
+            from backend.mcp.global_registry import mcp_registry
+            await mcp_registry.load_config()
+            await mcp_registry.start_all()
     except Exception as e:
         logger.warning("postgres_init_skipped", error=str(e),
                         note="Running with in-memory storage. PostgreSQL optional.")
 
     yield
+
+    if settings.MCP_ENABLED:
+        from backend.mcp.global_registry import mcp_registry
+        await mcp_registry.shutdown_all()
 
     logger.info("app_shutdown")
 
@@ -52,6 +64,8 @@ def create_app() -> FastAPI:
         version="2.0.0",
         lifespan=lifespan,
     )
+
+    app.middleware("http")(rate_limit_middleware)
 
     # Setup Arize Phoenix Observability
     try:

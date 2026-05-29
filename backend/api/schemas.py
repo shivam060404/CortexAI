@@ -31,6 +31,13 @@ class WatchSessionRequest(BaseModel):
     topic: str = Field(..., description="Topic to continuously monitor in the background")
     frequency_hours: float = Field(24.0, description="How often to run the watch (in hours)")
 
+class ContextInjectRequest(BaseModel):
+    session_id: str = Field(..., description="Target session ID or 'default'")
+    url: str
+    title: str = ""
+    content: str
+    tags: List[str] = Field(default_factory=list)
+    note: str = ""
 
 # --- Responses ---
 class TodoItemResponse(BaseModel):

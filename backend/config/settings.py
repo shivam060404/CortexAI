@@ -26,6 +26,10 @@ class Settings(BaseSettings):
 
     # --- Search ---
     TAVILY_API_KEY: str = ""
+    EXA_API_KEY: str = ""
+    FIRECRAWL_API_KEY: str = ""
+    SEARCH_MAX_PARALLEL_QUERIES: int = 20
+    SEARCH_PROVIDERS: List[str] = Field(default=["tavily", "exa", "firecrawl"])
 
     # --- Database ---
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/cortexai"
@@ -40,6 +44,15 @@ class Settings(BaseSettings):
 
     # --- Workspace (Local FS) ---
     WORKSPACE_ROOT: str = "./data/workspaces"
+
+    # --- MCP Protocol ---
+    MCP_ENABLED: bool = True
+    MCP_SERVERS_CONFIG: str = "./mcp_servers.json"
+
+    # --- Browser Agent ---
+    BROWSER_HEADLESS: bool = True
+    BROWSER_PROXY_POOL: List[str] = Field(default_factory=list)
+    BROWSER_CREDENTIAL_KEY: str = ""
 
     # --- Execution Control ---
     MAX_ITERATIONS: int = 20
@@ -81,8 +94,12 @@ class Settings(BaseSettings):
     RETRY_BACKOFF_FACTOR: float = 2.0
     CIRCUIT_BREAKER_THRESHOLD: int = 5
 
+    # --- Production Hardening ---
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60
+    
     # --- Intelligence Guardrails & Cost Tracking ---
-    GUARD_MAX_USD: float = 1.00  # Default budget $1 per session
+    GUARD_MAX_USD: float = 10.00  # Default budget $10 per session
     # Mistral pricing approx (in $ per 1 Million tokens)
     COST_PER_1M_INPUT_TOKENS: float = 2.0  
     COST_PER_1M_OUTPUT_TOKENS: float = 6.0 

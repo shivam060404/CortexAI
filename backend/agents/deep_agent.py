@@ -3,7 +3,7 @@ Deep Agent — core research agent factory.
 Creates a LangGraph ReAct-style agent with all tools, ExecutionGuard, and ToolPermissionGuard.
 """
 
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_openai import ChatOpenAI as ChatLiteLLM
 from backend.config import settings
 from backend.tools.search_tools import get_search_tools
 from backend.tools.fs_tools import get_fs_tools
@@ -18,6 +18,7 @@ from backend.tools.debate_tools import get_debate_tools
 from backend.tools.export_tools import get_export_tools
 from backend.agents.prompts import MAIN_RESEARCHER_PROMPT
 from backend.core.logger import get_logger
+from backend.mcp.global_registry import mcp_client
 
 logger = get_logger(__name__)
 
@@ -54,6 +55,13 @@ def create_research_agent(session_id: str, user_memory_context: str = ""):
         + debate_tools
         + export_tools
     )
+
+    if settings.MCP_ENABLED:
+        try:
+            mcp_tools = mcp_client.get_langchain_tools()
+            all_tools.extend(mcp_tools)
+        except Exception as e:
+            logger.error("mcp_tools_load_error", error=str(e))
 
     # Create LLM with tools bound
     llm = ChatLiteLLM(

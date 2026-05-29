@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from backend.api.schemas import (
     CreateSessionRequest, SessionResponse, SessionListResponse,
     TodoItemResponse, WorkspaceFileResponse, ExecutionMetrics, AgentEvent,
-    WatchSessionRequest,
+    WatchSessionRequest, ContextInjectRequest
 )
 from backend.core.graph import build_graph, get_execution_metrics, cleanup_session
 from backend.tools.planning_tools import get_session_todos
@@ -110,6 +110,46 @@ async def hydrate_sessions_from_db():
 
 
 # ──────────────────────── REST Endpoints ────────────────────────
+
+@router.post("/api/context/pages")
+async def inject_page_context(req: ContextInjectRequest):
+    """Receive webpage context injected from the Chrome Extension."""
+    try:
+        session_id = req.session_id
+        
+        # If default, use the most recent active session, or create a global 'default' workspace
+        if session_id == "default":
+            active_sessions = sorted([s for s in _sessions.values() if s["status"] in ("pending", "running")], 
+                                     key=lambda x: x["created_at"], reverse=True)
+            if active_sessions:
+                session_id = active_sessions[0]["id"]
+            else:
+                session_id = "default"
+
+        # Save context to the session's workspace
+        filename = f"context_{int(datetime.now().timestamp())}.json"
+        
+        content_dict = {
+            "url": req.url,
+            "title": req.title,
+            "tags": req.tags,
+            "note": req.note,
+            "extracted_text": req.content,
+            "injected_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        _workspace.write_file(session_id, filename, json.dumps(content_dict, indent=2))
+        
+        # Also update long-term user memory with this snippet
+        memory_prompt = f"User explicitly saved this webpage for reference: {req.url}\nTags: {req.tags}\nNote: {req.note}\nTitle: {req.title}"
+        await update_user_memory(memory_prompt)
+        
+        logger.info("context_injected", session_id=session_id, url=req.url, file=filename)
+        return {"status": "success", "session_id": session_id, "file": filename}
+        
+    except Exception as e:
+        logger.error("context_injection_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/api/sessions", response_model=SessionResponse)
 async def create_session(req: CreateSessionRequest):
@@ -628,15 +668,59 @@ async def websocket_research(websocket: WebSocket, session_id: str):
             "iteration": 0,
             "consecutive_failures": 0,
             "accessed_urls": set(),
+            "hitl_mode": "supervised", # Defaulting to supervised for testing
+            "pending_approval": None,
+            "user_modifications": [],
         }
+        
+        # Setup duplex communication
+        from backend.core.hitl import HITLManager
+        
+        async def listen_to_client():
+            while True:
+                try:
+                    msg = await websocket.receive_text()
+                    payload = json.loads(msg)
+                    msg_type = payload.get("type")
+                    
+                    if msg_type == "hitl_resume":
+                        action = payload.get("data", {}).get("action", "continue")
+                        modifications = payload.get("data", {}).get("modifications", {})
+                        modifications["action"] = action
+                        HITLManager.resume_with_input(session_id, modifications)
+                    
+                except WebSocketDisconnect:
+                    break
+                except Exception as e:
+                    logger.error("ws_listen_error", error=str(e))
+                    break
+                    
+        # Start client listener
+        listener_task = asyncio.create_task(listen_to_client())
 
         tracked_urls = set()
         # Stream agent events
-        async for event in graph.astream_events(initial_state, version="v2"):
+        async for event in graph.astream_events(initial_state, {"configurable": {"thread_id": session_id}}, version="v2"):
             try:
+                # Intercept HITL pause logging and send event
+                if event.get("event") == "on_chat_model_start" and HITLManager.is_paused(session_id):
+                    # We are in a paused state, we need to send the hitl_pause event
+                    # This happens when the graph blocks inside the agent node.
+                    pass # Actually handled below in a generic way
+
                 event_type = event.get("event", "")
                 event_name = event.get("name", "")
                 
+                # Expose HITL pause event by checking if HITLManager just got paused
+                if HITLManager.is_paused(session_id) and event_type == "on_chain_start" and event_name == "agent_node":
+                    await websocket.send_json({
+                        "type": "hitl_pause",
+                        "data": {
+                            "checkpoint_type": "checkpoint",
+                            "data": {}
+                        }
+                    })
+
                 # Extract tracked URLs
                 output = event.get("data", {}).get("output", {})
                 if isinstance(output, dict) and "accessed_urls" in output:
@@ -707,6 +791,9 @@ async def websocket_research(websocket: WebSocket, session_id: str):
 
             except Exception as e:
                 logger.error("ws_event_error", error=str(e), event_type=event.get("event", ""))
+
+        # Cancel listener task
+        listener_task.cancel()
 
         # Research complete
         _sessions[session_id]["status"] = "completed"

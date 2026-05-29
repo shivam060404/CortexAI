@@ -8,10 +8,11 @@ Layer 3 (OUTPUT): scan_llm_output()      — blocks harmful LLM responses BEFORE
 Also provides: PII redaction, citation verification, and scope drift detection.
 """
 import re
-from typing import Set, Tuple
+from typing import Set, Tuple, List
 from dataclasses import dataclass
 from backend.core.logger import get_logger
 from backend.config import settings
+from backend.core.ml_classifier import ml_classifier
 import importlib.util
 
 logger = get_logger(__name__)
