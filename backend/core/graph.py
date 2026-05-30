@@ -9,7 +9,7 @@ import time
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from backend.core.state import AgentState
 from backend.core.execution_guard import ExecutionGuard, ExecutionLimitExceeded
@@ -19,6 +19,7 @@ from backend.agents.cro_agent import get_cro_supervisor_agent, CRO_SYSTEM_PROMPT
 from backend.agents.search_agent import create_search_agent
 from backend.agents.verification_agent import create_verification_agent
 from backend.core.context_graph import ContextGraph
+from backend.config import settings
 import re
 
 logger = get_logger(__name__)
@@ -176,7 +177,11 @@ async def build_graph(session_id: str):
     })
     graph.add_edge("VerificationTools", "VerificationAgent")
     
-    compiled = graph.compile(checkpointer=MemorySaver())
+    # Create persistent checkpointer
+    checkpointer = AsyncPostgresSaver.from_conn_string(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://"))
+    await checkpointer.setup()
+
+    compiled = graph.compile(checkpointer=checkpointer)
     logger.info("multi_agent_graph_compiled", session_id=session_id)
     return compiled
 
@@ -187,3 +192,21 @@ def cleanup_session(session_id: str):
     _session_tool_guards.pop(session_id, None)
     _session_context_managers.pop(session_id, None)
     clear_failures(session_id)
+
+
+async def cleanup_stale_sessions(max_age_hours: int = 24):
+    """Remove sessions that have been idle for more than max_age_hours."""
+    stale_ids = []
+    for session_id in list(_session_graphs.keys()):
+        guard = _session_guards.get(session_id)
+        if guard and hasattr(guard, 'start_time'):
+            import time as _time
+            if _time.time() - guard.start_time > max_age_hours * 3600:
+                stale_ids.append(session_id)
+
+    for session_id in stale_ids:
+        cleanup_session(session_id)
+
+    if stale_ids:
+        logger.info("stale_sessions_cleaned", count=len(stale_ids))
+    return len(stale_ids)

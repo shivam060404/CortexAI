@@ -3,7 +3,6 @@ CortexAI Settings — centralized configuration with Pydantic BaseSettings.
 All values are overridable via environment variables or .env file.
 """
 
-import os
 from typing import List
 from pydantic_settings import BaseSettings
 from pydantic import Field
@@ -86,8 +85,20 @@ class Settings(BaseSettings):
         "execute_code_agent_task", "run_debate", "generate_presentation"
     ])
 
+    # --- Authentication ---
+    JWT_SECRET_KEY: str = "CHANGE-ME-IN-PRODUCTION"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # --- OAuth2 ---
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GITHUB_CLIENT_ID: str = ""
+    GITHUB_CLIENT_SECRET: str = ""
+
     # --- CORS ---
-    CORS_ORIGINS: List[str] = Field(default=["http://localhost:5173", "http://localhost:3000"])
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
     # --- Retry / Resilience ---
     MAX_RETRIES: int = 3
@@ -118,7 +129,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-if settings.MISTRAL_API_KEY:
-    os.environ["MISTRAL_API_KEY"] = settings.MISTRAL_API_KEY
-if settings.GROQ_API_KEY:
-    os.environ["GROQ_API_KEY"] = settings.GROQ_API_KEY

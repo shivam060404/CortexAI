@@ -8,13 +8,16 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, String, Text, Integer, Float, Boolean, DateTime, ForeignKey, Enum, JSON
+    Column, String, Text, Integer, Float, Boolean, DateTime, ForeignKey, Enum, JSON, func
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 from backend.config import settings
+
+# Import User model to ensure it's registered with Base
+from backend.auth.models import User  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +56,7 @@ class ResearchSession(Base):
     __tablename__ = "research_sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     title = Column(String(500), nullable=False)
     user_request = Column(Text, nullable=False)
     status = Column(Enum(SessionStatus), default=SessionStatus.PENDING, nullable=False)
@@ -175,6 +179,7 @@ class UserMemory(Base):
     __tablename__ = "user_memories"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     topic = Column(String(200), nullable=False, unique=True)
     relevance_score = Column(Integer, default=1)
     last_accessed = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -185,6 +190,7 @@ class FeedbackLog(Base):
     __tablename__ = "feedback_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     session_id = Column(UUID(as_uuid=True), ForeignKey("research_sessions.id", ondelete="CASCADE"), nullable=False)
     rating = Column(Integer, nullable=False)  # 1-5 stars or thumbs -1/+1
     comment = Column(Text, default="")
@@ -198,11 +204,24 @@ class UserPreference(Base):
     __tablename__ = "user_preferences"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     key = Column(String(100), nullable=False, unique=True)  # e.g. "depth", "verbosity", "style"
     value = Column(String(500), nullable=False)
     confidence = Column(Float, default=0.5)  # How confident we are in this preference (0-1)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type = Column(String(100), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    details = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 # ---------------------------------------------------------------------------

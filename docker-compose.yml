@@ -6,8 +6,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/cortexai
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-changeme}@db:5432/cortexai
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
       - MCP_ENABLED=True
       - RATE_LIMIT_ENABLED=True
       # API Keys should be passed via .env file
@@ -20,6 +20,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    networks:
+      - cortex-internal
 
   cortex-frontend:
     build:
@@ -29,15 +31,15 @@ services:
       - "3000:80"
     depends_on:
       - cortex-api
+    networks:
+      - cortex-internal
 
   db:
     image: postgres:15-alpine
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
       - POSTGRES_DB=cortexai
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -45,14 +47,26 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - cortex-internal
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme}
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cortex-internal
 
 volumes:
   postgres_data:
   redis_data:
+
+networks:
+  cortex-internal:
+    driver: bridge

@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
 from backend.core.logger import get_logger
 from backend.api.routes import router
-from backend.api.middleware import rate_limit_middleware
+from backend.auth.routes import router as auth_router
+from backend.api.middleware import SecurityHeadersMiddleware, RateLimitMiddleware, AuditMiddleware
 
 logger = get_logger(__name__)
 
@@ -24,15 +25,17 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.WORKSPACE_ROOT, exist_ok=True)
     os.makedirs(settings.LANCEDB_PERSIST_DIR, exist_ok=True)
 
+    # Initialize session store and rate limiter
+    from backend.core.session_store import session_store
+    from backend.core.rate_limiter import rate_limiter
+    await session_store.connect()
+    await rate_limiter.connect()
+
     # Try to initialize PostgreSQL tables (graceful if DB not available)
     try:
         from backend.db.postgres import init_db
         await init_db()
         logger.info("postgres_initialized")
-
-        # Hydrate in-memory session cache from DB
-        from backend.api.routes import hydrate_sessions_from_db
-        await hydrate_sessions_from_db()
         
         # Start background job scheduler
         from backend.core.scheduler import start_scheduler
@@ -53,6 +56,12 @@ async def lifespan(app: FastAPI):
         from backend.mcp.global_registry import mcp_registry
         await mcp_registry.shutdown_all()
 
+    # Close session store and rate limiter
+    from backend.core.session_store import session_store
+    from backend.core.rate_limiter import rate_limiter
+    await session_store.close()
+    await rate_limiter.close()
+
     logger.info("app_shutdown")
 
 
@@ -65,7 +74,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.middleware("http")(rate_limit_middleware)
+    # Security & rate limiting middleware (order matters: last added = first executed)
+    app.add_middleware(AuditMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # Setup Arize Phoenix Observability
     try:
@@ -107,6 +119,7 @@ def create_app() -> FastAPI:
     # Register routes
     from backend.api.routes import router
     app.include_router(router)
+    app.include_router(auth_router)
 
     # Health check
     @app.get("/health")

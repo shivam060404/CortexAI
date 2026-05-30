@@ -10,8 +10,12 @@ import uuid
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from langchain_core.messages import HumanMessage, AIMessage
+
+from backend.auth.dependencies import get_current_active_user, get_optional_user
+from backend.auth.models import User
+from backend.core.session_store import session_store
 
 from backend.api.schemas import (
     CreateSessionRequest, SessionResponse, SessionListResponse,
@@ -33,8 +37,6 @@ from backend.core.logger import get_logger
 logger = get_logger(__name__)
 router = APIRouter()
 
-# In-memory session cache (hydrated from PostgreSQL on startup)
-_sessions: dict[str, dict] = {}
 _workspace = WorkspaceManager()
 
 
@@ -82,44 +84,18 @@ async def _update_session_in_db(session_id: str, updates: dict):
         logger.error("session_update_db_failed", session_id=session_id, error=str(e))
 
 
-async def hydrate_sessions_from_db():
-    """Load all sessions from PostgreSQL into the in-memory cache."""
-    try:
-        async with async_session() as db:
-            result = await db.execute(
-                select(ResearchSession).order_by(ResearchSession.created_at.desc())
-            )
-            rows = result.scalars().all()
-            for row in rows:
-                _sessions[str(row.id)] = {
-                    "id": str(row.id),
-                    "title": row.title,
-                    "user_request": row.user_request,
-                    "status": row.status.value if hasattr(row.status, 'value') else str(row.status),
-                    "final_report": row.final_report or "",
-                    "iterations_used": row.iterations_used or 0,
-                    "tokens_used": row.tokens_used or 0,
-                    "tool_calls_count": row.tool_calls_count or 0,
-                    "created_at": row.created_at.isoformat() if row.created_at else "",
-                    "updated_at": row.updated_at.isoformat() if row.updated_at else "",
-                }
-            logger.info("sessions_hydrated", count=len(rows))
-    except Exception as e:
-        logger.warning("session_hydration_failed", error=str(e),
-                        note="Running with empty in-memory cache.")
-
-
 # ──────────────────────── REST Endpoints ────────────────────────
 
 @router.post("/api/context/pages")
-async def inject_page_context(req: ContextInjectRequest):
+async def inject_page_context(req: ContextInjectRequest, current_user: User = Depends(get_current_active_user)):
     """Receive webpage context injected from the Chrome Extension."""
     try:
         session_id = req.session_id
         
         # If default, use the most recent active session, or create a global 'default' workspace
         if session_id == "default":
-            active_sessions = sorted([s for s in _sessions.values() if s["status"] in ("pending", "running")], 
+            user_sessions = await session_store.list_by_user(str(current_user.id))
+            active_sessions = sorted([s for s in user_sessions if s["status"] in ("pending", "running")], 
                                      key=lambda x: x["created_at"], reverse=True)
             if active_sessions:
                 session_id = active_sessions[0]["id"]
@@ -152,7 +128,7 @@ async def inject_page_context(req: ContextInjectRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/api/sessions", response_model=SessionResponse)
-async def create_session(req: CreateSessionRequest):
+async def create_session(req: CreateSessionRequest, current_user: User = Depends(get_current_active_user)):
     """Create a new research session."""
     session_id = str(uuid.uuid4())
     session = {
@@ -164,10 +140,11 @@ async def create_session(req: CreateSessionRequest):
         "iterations_used": 0,
         "tokens_used": 0,
         "tool_calls_count": 0,
+        "user_id": str(current_user.id),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    _sessions[session_id] = session
+    await session_store.set(session_id, session, user_id=str(current_user.id))
     logger.info("session_created", session_id=session_id, query=req.query[:80])
 
     # Persist to DB (awaited to guarantee durability)
@@ -177,9 +154,9 @@ async def create_session(req: CreateSessionRequest):
 
 
 @router.get("/api/sessions", response_model=SessionListResponse)
-async def list_sessions():
-    """List all research sessions."""
-    sessions = sorted(_sessions.values(), key=lambda s: s["created_at"], reverse=True)
+async def list_sessions(current_user: User = Depends(get_current_active_user)):
+    """List all research sessions for the current user."""
+    sessions = await session_store.list_by_user(str(current_user.id))
     return SessionListResponse(
         sessions=[SessionResponse(**s) for s in sessions],
         total=len(sessions),
@@ -187,20 +164,21 @@ async def list_sessions():
 
 
 @router.get("/api/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str):
+async def get_session(session_id: str, current_user: User = Depends(get_current_active_user)):
     """Get a specific session."""
-    session = _sessions.get(session_id)
-    if not session:
+    session = await session_store.get(session_id)
+    if not session or session.get("user_id") != str(current_user.id):
         raise HTTPException(status_code=404, detail="Session not found")
     return SessionResponse(**session)
 
 
 @router.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, current_user: User = Depends(get_current_active_user)):
     """Delete a research session."""
-    if session_id not in _sessions:
+    session = await session_store.get(session_id)
+    if not session or session.get("user_id") != str(current_user.id):
         raise HTTPException(status_code=404, detail="Session not found")
-    _sessions.pop(session_id, None)
+    await session_store.delete(session_id, user_id=str(current_user.id))
     cleanup_session(session_id)
 
     # Delete from DB
@@ -216,9 +194,10 @@ async def delete_session(session_id: str):
 
 
 @router.post("/api/sessions/{session_id}/watch")
-async def start_background_watch(session_id: str, req: WatchSessionRequest):
+async def start_background_watch(session_id: str, req: WatchSessionRequest, current_user: User = Depends(get_current_active_user)):
     """Schedule a recurring background watch script for this session."""
-    if session_id not in _sessions:
+    session = await session_store.get(session_id)
+    if not session or session.get("user_id") != str(current_user.id):
         raise HTTPException(status_code=404, detail="Session not found")
         
     job_id = schedule_watch(session_id, req.topic, req.frequency_hours)
@@ -232,14 +211,14 @@ async def start_background_watch(session_id: str, req: WatchSessionRequest):
 
 
 @router.get("/api/sessions/{session_id}/todos")
-async def get_todos(session_id: str):
+async def get_todos(session_id: str, current_user: User = Depends(get_current_active_user)):
     """Get the todo list for a session."""
     todos = get_session_todos(session_id)
     return {"todos": todos}
 
 
 @router.get("/api/sessions/{session_id}/files")
-async def get_files(session_id: str, path: str = "."):
+async def get_files(session_id: str, path: str = ".", current_user: User = Depends(get_current_active_user)):
     """List workspace files for a session."""
     try:
         entries = _workspace.list_dir(session_id, path)
@@ -249,7 +228,7 @@ async def get_files(session_id: str, path: str = "."):
 
 
 @router.get("/api/sessions/{session_id}/files/content")
-async def get_file_content(session_id: str, path: str):
+async def get_file_content(session_id: str, path: str, current_user: User = Depends(get_current_active_user)):
     """Read a workspace file's content."""
     try:
         content = _workspace.read_file(session_id, path)
@@ -259,14 +238,14 @@ async def get_file_content(session_id: str, path: str):
 
 
 @router.get("/api/sessions/{session_id}/metrics")
-async def get_metrics(session_id: str):
+async def get_metrics(session_id: str, current_user: User = Depends(get_current_active_user)):
     """Get current execution metrics for a session."""
     metrics = get_execution_metrics(session_id)
     return ExecutionMetrics(**metrics) if metrics else ExecutionMetrics()
 
 
 @router.get("/api/sessions/{session_id}/experiments")
-async def get_experiments(session_id: str):
+async def get_experiments(session_id: str, current_user: User = Depends(get_current_active_user)):
     """Get experiment logs for a session."""
     try:
         async with async_session() as db:
@@ -294,7 +273,7 @@ async def get_experiments(session_id: str):
 # ──────────────────────── Observability (Traces) ────────────────────────
 
 @router.get("/api/sessions/{session_id}/traces")
-async def get_session_traces(session_id: str, limit: int = 100):
+async def get_session_traces(session_id: str, limit: int = 100, current_user: User = Depends(get_current_active_user)):
     """Get agent traces for a session — tool calls, iterations, errors."""
     try:
         async with async_session() as db:
@@ -327,7 +306,7 @@ async def get_session_traces(session_id: str, limit: int = 100):
 # ──────────────────────── Knowledge Graph ────────────────────────
 
 @router.get("/api/knowledge/nodes")
-async def get_knowledge_nodes(limit: int = 50):
+async def get_knowledge_nodes(limit: int = 50, current_user: User = Depends(get_current_active_user)):
     """Get all knowledge graph nodes with edge counts (single JOIN query)."""
     try:
         async with async_session() as db:
@@ -376,7 +355,7 @@ async def get_knowledge_nodes(limit: int = 50):
 
 
 @router.get("/api/knowledge/edges")
-async def get_knowledge_edges(limit: int = 100):
+async def get_knowledge_edges(limit: int = 100, current_user: User = Depends(get_current_active_user)):
     """Get knowledge graph edges with source/target names."""
     try:
         async with async_session() as db:
@@ -407,7 +386,7 @@ async def get_knowledge_edges(limit: int = 100):
 
 
 @router.get("/api/knowledge/search")
-async def search_knowledge(q: str, limit: int = 20):
+async def search_knowledge(q: str, limit: int = 20, current_user: User = Depends(get_current_active_user)):
     """Search the knowledge graph for concepts matching a query."""
     try:
         async with async_session() as db:
@@ -452,7 +431,7 @@ async def search_knowledge(q: str, limit: int = 20):
 # ──────────────────────── Experiment Stats ────────────────────────
 
 @router.get("/api/experiments/stats")
-async def get_experiment_stats():
+async def get_experiment_stats(current_user: User = Depends(get_current_active_user)):
     """Get aggregate experiment statistics across all sessions."""
     try:
         async with async_session() as db:
@@ -492,7 +471,7 @@ async def get_experiment_stats():
 # ──────────────────────── RLHF Alignment ────────────────────────
 
 @router.get("/api/research/modes")
-async def get_research_modes():
+async def get_research_modes(current_user: User = Depends(get_current_active_user)):
     """Get available research modes for the mode selector."""
     return {"modes": [
         {"id": k, "label": v["label"], "depth": v["depth"], "max_sources": v["max_sources"]}
@@ -501,7 +480,7 @@ async def get_research_modes():
 
 
 @router.post("/api/research/align")
-async def align_research_query(req: dict):
+async def align_research_query(req: dict, current_user: User = Depends(get_current_active_user)):
     """Pre-research alignment — refines query, decomposes sub-queries, detects ambiguity."""
     query = req.get("query", "")
     mode = req.get("mode", "deep")
@@ -532,7 +511,7 @@ async def align_research_query(req: dict):
 
 
 @router.post("/api/feedback")
-async def submit_feedback(req: dict):
+async def submit_feedback(req: dict, current_user: User = Depends(get_current_active_user)):
     """RLHF feedback capture — rate and comment on research quality."""
     session_id = req.get("session_id", "")
     rating = req.get("rating", 0)
@@ -542,8 +521,8 @@ async def submit_feedback(req: dict):
         raise HTTPException(status_code=400, detail="session_id and rating required")
 
     # Get session query for context
-    session = _sessions.get(session_id, {})
-    query = session.get("user_request", "")
+    session = await session_store.get(session_id)
+    query = session.get("user_request", "") if session else ""
 
     try:
         # Store feedback
@@ -569,7 +548,7 @@ async def submit_feedback(req: dict):
 
 
 @router.get("/api/preferences")
-async def get_preferences():
+async def get_preferences(current_user: User = Depends(get_current_active_user)):
     """Get learned user preferences."""
     prefs = await get_user_preferences()
     return {"preferences": prefs}
