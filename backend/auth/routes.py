@@ -1,8 +1,6 @@
 """Authentication routes for CortexAI."""
-import secrets
 
-from fastapi import APIRouter, HTTPException, status, Depends, Request
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, HTTPException, Depends, Request
 from passlib.context import CryptContext
 from sqlalchemy import select
 from jose import JWTError
@@ -23,42 +21,14 @@ from backend.auth.oauth import (
     handle_github_callback,
 )
 from backend.auth.dependencies import get_current_active_user
+from backend.auth.api_keys import generate_api_key_pair
+from backend.api.schemas import RegisterRequest, LoginRequest, OAuthCallbackRequest, UserResponse
+from backend.core.audit import audit_logger
 from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-# ─── Request/Response Schemas ───
-
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-    full_name: str | None = None
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class UserResponse(BaseModel):
-    id: str
-    email: str
-    full_name: str | None
-    avatar_url: str | None
-    provider: str
-    is_active: bool
-
-    class Config:
-        from_attributes = True
-
-
-class OAuthCallbackRequest(BaseModel):
-    code: str
-    redirect_uri: str
 
 
 # ─── Endpoints ───
@@ -83,6 +53,7 @@ async def register(req: RegisterRequest):
         await db.refresh(user)
 
     logger.info("user_registered", email=req.email)
+    await audit_logger.log("register", user_id=str(user.id), details={"email": req.email})
     return TokenResponse(
         access_token=create_access_token(str(user.id)),
         refresh_token=create_refresh_token(str(user.id)),
@@ -106,6 +77,7 @@ async def login(req: LoginRequest):
         raise HTTPException(status_code=403, detail="Account disabled")
 
     logger.info("user_login", email=req.email)
+    await audit_logger.log("login", user_id=str(user.id), details={"email": req.email})
     return TokenResponse(
         access_token=create_access_token(str(user.id)),
         refresh_token=create_refresh_token(str(user.id)),
@@ -138,10 +110,12 @@ async def get_me(current_user: User = Depends(get_current_active_user)):
     """Get the current authenticated user's profile."""
     return UserResponse(
         id=str(current_user.id),
+        organization_id=str(getattr(current_user, "organization_id", None) or current_user.id),
         email=current_user.email,
         full_name=current_user.full_name,
         avatar_url=current_user.avatar_url,
         provider=current_user.provider,
+        role=("admin" if bool(getattr(current_user, "is_admin", False)) else getattr(current_user, "role", "owner")),
         is_active=current_user.is_active,
     )
 
@@ -149,16 +123,17 @@ async def get_me(current_user: User = Depends(get_current_active_user)):
 @router.post("/api-key")
 async def generate_api_key(current_user: User = Depends(get_current_active_user)):
     """Generate a new API key for the current user."""
-    new_key = f"ctx_{secrets.token_hex(24)}"
+    raw_api_key, stored_api_key = generate_api_key_pair()
 
     async with async_session() as db:
         result = await db.execute(select(User).where(User.id == current_user.id))
         user = result.scalar_one()
-        user.api_key = new_key
+        user.api_key = stored_api_key
         await db.commit()
 
     logger.info("api_key_generated", user_id=str(current_user.id))
-    return {"api_key": new_key}
+    await audit_logger.log("api_key_generated", user_id=str(current_user.id))
+    return {"api_key": raw_api_key}
 
 
 # ─── OAuth2 Endpoints ───
@@ -179,6 +154,7 @@ async def google_callback(req: OAuthCallbackRequest):
     try:
         user, tokens = await handle_google_callback(req.code, req.redirect_uri)
         logger.info("google_oauth_success", email=user.email)
+        await audit_logger.log("login", user_id=str(user.id), details={"provider": "google", "email": user.email})
         return tokens
     except Exception as e:
         logger.error("google_oauth_error", error=str(e))
@@ -200,6 +176,7 @@ async def github_callback(req: OAuthCallbackRequest):
     try:
         user, tokens = await handle_github_callback(req.code, req.redirect_uri)
         logger.info("github_oauth_success", email=user.email)
+        await audit_logger.log("login", user_id=str(user.id), details={"provider": "github", "email": user.email})
         return tokens
     except Exception as e:
         logger.error("github_oauth_error", error=str(e))

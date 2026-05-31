@@ -1,13 +1,11 @@
-"""
-Background Watcher (Cron Jobs via APScheduler)
-Enables continuous, asynchronous research updates on specific topics.
-"""
+"""Background job scheduler that enqueues recurring watch jobs onto Redis."""
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from langchain_core.messages import HumanMessage
+
+from backend.core.job_queue import job_queue
 from backend.core.logger import get_logger
-from backend.core.graph import build_graph
+from backend.workers.jobs import BACKGROUND_WATCH_JOB, build_background_watch_payload
 
 logger = get_logger(__name__)
 
@@ -20,59 +18,63 @@ def start_scheduler():
         scheduler.start()
         logger.info("background_scheduler_started")
 
-async def _run_background_watch(session_id: str, topic: str):
-    """
-    The actual task executed by the scheduler.
-    Spins up the LangGraph agent bound to the session in the background
-    to perform an incremental watch search.
-    """
-    logger.info("background_watch_triggered", session_id=session_id, topic=topic[:50])
+async def _enqueue_background_watch(
+    session_id: str,
+    user_id: str,
+    topic: str,
+    organization_id: str | None,
+    role: str,
+):
+    """Enqueue a recurring watch job for dedicated worker execution."""
     try:
-        # Build the graph
-        graph = await build_graph(session_id)
-        
-        # We tell the agent to search for NEW developments.
-        query = (
-            f"BACKGROUND WATCH NOTIFICATION: Produce an update report on '{topic}'. "
-            f"Search exclusively for new information, articles, or data. "
-            f"Do not restate old background information unless contextually necessary. "
-            f"If you find new findings, save them to the workspace as 'watch_update.md' "
-            f"and update the Knowledge Graph."
+        await job_queue.connect()
+        job = await job_queue.enqueue(
+            BACKGROUND_WATCH_JOB,
+            build_background_watch_payload(
+                session_id=session_id,
+                user_id=user_id,
+                topic=topic,
+                organization_id=organization_id,
+                role=role,
+            ),
         )
-        
-        initial_state = {
-            "messages": [HumanMessage(content=query)],
-            "session_id": session_id,
-            "status": "running",
-            "iteration": 0,
-            "consecutive_failures": 0,
-            "accessed_urls": set()
-        }
-        
-        # Run asynchronously to completion without yielding chunks to a websocket
-        await graph.ainvoke(initial_state)
-        
-        logger.info("background_watch_completed", session_id=session_id)
+        logger.info(
+            "background_watch_enqueued",
+            session_id=session_id,
+            topic=topic[:50],
+            job_id=job["id"],
+        )
     except Exception as e:
-        logger.error("background_watch_failed", session_id=session_id, error=str(e))
+        logger.error("background_watch_enqueue_failed", session_id=session_id, error=str(e))
 
-def schedule_watch(session_id: str, topic: str, frequency_hours: float = 24.0):
-    """
-    Schedule a new background watch task.
-    """
+
+def schedule_watch(
+    session_id: str,
+    user_id: str,
+    topic: str,
+    frequency_hours: float = 24.0,
+    *,
+    organization_id: str | None = None,
+    role: str = "owner",
+):
+    """Schedule a recurring queue-backed watch task."""
     job_id = f"watch_{session_id}"
-    
-    # Remove existing job if user modifies it
+
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
-        
+
     scheduler.add_job(
-        _run_background_watch,
+        _enqueue_background_watch,
         trigger=IntervalTrigger(hours=frequency_hours),
         id=job_id,
-        args=[session_id, topic],
-        replace_existing=True
+        args=[session_id, user_id, topic, organization_id, role],
+        replace_existing=True,
     )
-    
-    logger.info("background_watch_scheduled", session_id=session_id, frequency_hours=frequency_hours)
+
+    logger.info(
+        "background_watch_scheduled",
+        session_id=session_id,
+        user_id=user_id,
+        frequency_hours=frequency_hours,
+    )
     return job_id

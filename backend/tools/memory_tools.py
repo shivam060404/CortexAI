@@ -1,18 +1,21 @@
-import json
+import uuid
 from datetime import datetime, timezone
-from sqlalchemy import select, String, cast
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from backend.db.postgres import async_session, UserMemory
 from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
 
-async def get_user_memory_context() -> str:
+async def get_user_memory_context(user_id: str) -> str:
     """Retrieve top interests from user memory."""
     try:
+        user_uuid = uuid.UUID(str(user_id))
         async with async_session() as db:
             res = await db.execute(
-                select(UserMemory).order_by(UserMemory.relevance_score.desc()).limit(10)
+                select(UserMemory)
+                .where(UserMemory.user_id == user_uuid)
+                .order_by(UserMemory.relevance_score.desc())
+                .limit(10)
             )
             memories = res.scalars().all()
             if not memories:
@@ -24,7 +27,7 @@ async def get_user_memory_context() -> str:
         logger.error("get_user_memory_error", error=str(e))
         return "Failed to retrieve user memory."
 
-async def update_user_memory(query: str):
+async def update_user_memory(query: str, user_id: str):
     """Extract and update user interests based on a new search query."""
     # A simple keyword heuristic: assume the query itself or key words are the topic.
     # In a full production system, we'd use an LLM or NLP to extract exact topics.
@@ -35,16 +38,22 @@ async def update_user_memory(query: str):
         return
 
     try:
+        user_uuid = uuid.UUID(str(user_id))
         async with async_session() as db:
             # Check if this topic exists
-            res = await db.execute(select(UserMemory).where(UserMemory.topic == topic))
+            res = await db.execute(
+                select(UserMemory).where(
+                    UserMemory.user_id == user_uuid,
+                    UserMemory.topic == topic,
+                )
+            )
             memory = res.scalars().first()
             
             if memory:
                 memory.relevance_score += 1
                 memory.last_accessed = datetime.now(timezone.utc)
             else:
-                db.add(UserMemory(topic=topic))
+                db.add(UserMemory(user_id=user_uuid, topic=topic))
             
             await db.commit()
             logger.info("user_memory_updated", topic=topic)

@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
+import { clearAuthTokens } from '../../services/api';
 import './Sidebar.css';
 
 const NAV_GROUPS = [
@@ -34,6 +35,13 @@ const NAV_GROUPS = [
 ];
 
 export default function Sidebar() {
+  const navigate = useNavigate();
+
+  function handleLogout() {
+    clearAuthTokens();
+    navigate('/login', { replace: true });
+  }
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -68,6 +76,9 @@ export default function Sidebar() {
           <span className="status-dot"></span>
           <span>System Online</span>
         </div>
+        <button className="btn btn-ghost btn-sm" onClick={handleLogout}>
+          Sign Out
+        </button>
         <div className="sidebar-version">v2.1</div>
       </div>
     </aside>

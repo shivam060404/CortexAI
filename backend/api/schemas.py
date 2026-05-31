@@ -2,7 +2,6 @@
 Pydantic request/response schemas for the CortexAI API.
 """
 
-from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -38,6 +37,36 @@ class ContextInjectRequest(BaseModel):
     content: str
     tags: List[str] = Field(default_factory=list)
     note: str = ""
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=8, max_length=255)
+    full_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=8, max_length=255)
+
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    redirect_uri: str
+
+
+class UserResponse(BaseModel):
+    id: str
+    organization_id: Optional[str] = None
+    email: str
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    provider: str
+    role: str = "owner"
+    is_active: bool
+
+    class Config:
+        from_attributes = True
 
 # --- Responses ---
 class TodoItemResponse(BaseModel):

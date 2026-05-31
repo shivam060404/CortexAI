@@ -1,22 +1,19 @@
-"""
-FastAPI application factory — CORS, lifespan, router registration.
-"""
+"""FastAPI application factory — CORS, lifespan, router registration."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
 from backend.core.logger import get_logger
-from backend.api.routes import router
 from backend.auth.routes import router as auth_router
-from backend.api.middleware import SecurityHeadersMiddleware, RateLimitMiddleware, AuditMiddleware
+from backend.api.middleware import AuthMiddleware, SecurityHeadersMiddleware, RateLimitMiddleware, AuditMiddleware
 
 logger = get_logger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """Startup / shutdown events."""
     logger.info("app_startup", cors_origins=settings.CORS_ORIGINS)
 
@@ -77,6 +74,7 @@ def create_app() -> FastAPI:
     # Security & rate limiting middleware (order matters: last added = first executed)
     app.add_middleware(AuditMiddleware)
     app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(AuthMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
 
     # Setup Arize Phoenix Observability
@@ -125,6 +123,56 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {"status": "ok", "version": "2.0.0"}
+
+    @app.get("/live")
+    async def live():
+        return {"status": "alive", "version": "2.0.0"}
+
+    @app.get("/ready")
+    async def ready():
+        from sqlalchemy import text
+
+        from backend.core.rate_limiter import rate_limiter
+        from backend.core.session_store import session_store
+        from backend.db.postgres import async_session
+
+        checks = {
+            "session_store": session_store.is_connected,
+            "rate_limiter": getattr(rate_limiter, "_redis", None) is not None,
+            "database": False,
+        }
+
+        try:
+            async with async_session() as db:
+                await db.execute(text("SELECT 1"))
+            checks["database"] = True
+        except Exception as exc:
+            logger.warning("readiness_database_check_failed", error=str(exc))
+
+        if not all(checks.values()):
+            raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": checks})
+
+        queue_depth = None
+        autoscaling = None
+        try:
+            from backend.core.job_queue import job_queue
+            from backend.core.worker_scaling import calculate_desired_worker_replicas
+
+            if job_queue._redis is not None:
+                queue_depth = await job_queue.depth()
+                autoscaling = calculate_desired_worker_replicas(
+                    queue_depth=queue_depth,
+                    current_replicas=settings.WORKER_MIN_REPLICAS,
+                )
+        except Exception as exc:
+            logger.warning("readiness_queue_depth_check_failed", error=str(exc))
+
+        return {
+            "status": "ready",
+            "checks": checks,
+            "queue_depth": queue_depth,
+            "worker_autoscaling": autoscaling,
+        }
 
     return app
 

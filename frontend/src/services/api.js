@@ -1,121 +1,218 @@
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const ACCESS_TOKEN_KEY = 'cortexai_access_token';
+const REFRESH_TOKEN_KEY = 'cortexai_refresh_token';
+
+export function getApiBase() {
+  return API_BASE;
+}
+
+export function getToken() {
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function getRefreshTokenValue() {
+  return localStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+export function setAuthTokens({ access_token, refresh_token }) {
+  if (access_token) localStorage.setItem(ACCESS_TOKEN_KEY, access_token);
+  if (refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, refresh_token);
+}
+
+export function clearAuthTokens() {
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+export function isAuthenticated() {
+  return Boolean(getToken());
+}
+
+function redirectToLogin() {
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
+}
+
+async function parseResponse(res) {
+  const contentType = res.headers.get('content-type') || '';
+  const payload = contentType.includes('application/json') ? await res.json() : await res.text();
+  if (!res.ok) {
+    const detail = typeof payload === 'string' ? payload : payload?.detail || `Request failed: ${res.status}`;
+    throw new Error(detail);
+  }
+  return payload;
+}
+
+async function apiFetch(path, options = {}, retryOn401 = true) {
+  const headers = new Headers(options.headers || {});
+  headers.set('Content-Type', headers.get('Content-Type') || 'application/json');
+
+  const token = getToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (response.status === 401 && retryOn401 && getRefreshTokenValue()) {
+    try {
+      await refreshToken();
+      return apiFetch(path, options, false);
+    } catch (error) {
+      clearAuthTokens();
+      redirectToLogin();
+      throw error;
+    }
+  }
+
+  return parseResponse(response);
+}
+
+export async function register(email, password, fullName = '') {
+  const payload = await apiFetch('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ email, password, full_name: fullName || null }),
+  }, false);
+  setAuthTokens(payload);
+  return payload;
+}
+
+export async function login(email, password) {
+  const payload = await apiFetch('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  }, false);
+  setAuthTokens(payload);
+  return payload;
+}
+
+export async function refreshToken() {
+  const refresh = getRefreshTokenValue();
+  if (!refresh) {
+    throw new Error('No refresh token available');
+  }
+
+  const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${refresh}`,
+    },
+  });
+
+  const payload = await parseResponse(response);
+  setAuthTokens(payload);
+  return payload;
+}
+
+export async function getCurrentUser() {
+  return apiFetch('/api/auth/me');
+}
+
+export async function generateApiKey() {
+  return apiFetch('/api/auth/api-key', { method: 'POST' });
+}
+
+export async function getOAuthUrl(provider, redirectUri) {
+  const res = await apiFetch(`/api/auth/${provider}?redirect_uri=${encodeURIComponent(redirectUri)}`, {}, false);
+  return res.auth_url;
+}
+
+export async function exchangeOAuthCode(provider, code, redirectUri) {
+  const payload = await apiFetch(`/api/auth/${provider}/callback`, {
+    method: 'POST',
+    body: JSON.stringify({ code, redirect_uri: redirectUri }),
+  }, false);
+  setAuthTokens(payload);
+  return payload;
+}
+
+export async function loginWithGoogle(redirectUri) {
+  const authUrl = await getOAuthUrl('google', redirectUri);
+  window.location.href = authUrl;
+}
+
+export async function loginWithGithub(redirectUri) {
+  const authUrl = await getOAuthUrl('github', redirectUri);
+  window.location.href = authUrl;
+}
 
 export async function createSession(query) {
-  const res = await fetch(`${API_BASE}/api/sessions`, {
+  return apiFetch('/api/sessions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
   });
-  if (!res.ok) throw new Error(`Create session failed: ${res.status}`);
-  return res.json();
 }
 
 export async function listSessions() {
-  const res = await fetch(`${API_BASE}/api/sessions`);
-  if (!res.ok) throw new Error(`List sessions failed: ${res.status}`);
-  return res.json();
+  return apiFetch('/api/sessions');
 }
 
 export async function getSession(sessionId) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
-  if (!res.ok) throw new Error(`Get session failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}`);
 }
 
 export async function deleteSession(sessionId) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`Delete session failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
 }
 
 export async function getSessionTodos(sessionId) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/todos`);
-  if (!res.ok) throw new Error(`Get todos failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}/todos`);
 }
 
 export async function getSessionFiles(sessionId, path = '.') {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/files?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error(`Get files failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}/files?path=${encodeURIComponent(path)}`);
 }
 
 export async function getFileContent(sessionId, path) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/files/content?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error(`Get file content failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}/files/content?path=${encodeURIComponent(path)}`);
 }
 
 export async function getSessionMetrics(sessionId) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/metrics`);
-  if (!res.ok) throw new Error(`Get metrics failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}/metrics`);
 }
 
 export async function getSessionTraces(sessionId, limit = 100) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/traces?limit=${limit}`);
-  if (!res.ok) throw new Error(`Get traces failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}/traces?limit=${limit}`);
 }
 
 export async function getKnowledgeNodes(limit = 50) {
-  const res = await fetch(`${API_BASE}/api/knowledge/nodes?limit=${limit}`);
-  if (!res.ok) throw new Error(`Get KG nodes failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/knowledge/nodes?limit=${limit}`);
 }
 
 export async function getKnowledgeEdges(limit = 100) {
-  const res = await fetch(`${API_BASE}/api/knowledge/edges?limit=${limit}`);
-  if (!res.ok) throw new Error(`Get KG edges failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/knowledge/edges?limit=${limit}`);
 }
 
 export async function searchKnowledge(query) {
-  const res = await fetch(`${API_BASE}/api/knowledge/search?q=${encodeURIComponent(query)}`);
-  if (!res.ok) throw new Error(`KG search failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/knowledge/search?q=${encodeURIComponent(query)}`);
 }
 
 export async function getExperimentStats() {
-  const res = await fetch(`${API_BASE}/api/experiments/stats`);
-  if (!res.ok) throw new Error(`Get experiment stats failed: ${res.status}`);
-  return res.json();
+  return apiFetch('/api/experiments/stats');
 }
 
 export async function getSessionExperiments(sessionId) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/experiments`);
-  if (!res.ok) throw new Error(`Get experiments failed: ${res.status}`);
-  return res.json();
+  return apiFetch(`/api/sessions/${sessionId}/experiments`);
 }
 
 export async function getResearchModes() {
-  const res = await fetch(`${API_BASE}/api/research/modes`);
-  if (!res.ok) throw new Error(`Get modes failed: ${res.status}`);
-  return res.json();
+  return apiFetch('/api/research/modes');
 }
 
 export async function alignQuery(query, mode = 'deep') {
-  const res = await fetch(`${API_BASE}/api/research/align`, {
+  return apiFetch('/api/research/align', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, mode }),
   });
-  if (!res.ok) throw new Error(`Alignment failed: ${res.status}`);
-  return res.json();
 }
 
 export async function submitFeedback(sessionId, rating, comment = '', mode = 'deep') {
-  const res = await fetch(`${API_BASE}/api/feedback`, {
+  return apiFetch('/api/feedback', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId, rating, comment, mode }),
   });
-  if (!res.ok) throw new Error(`Feedback failed: ${res.status}`);
-  return res.json();
 }
 
 export async function getPreferences() {
-  const res = await fetch(`${API_BASE}/api/preferences`);
-  if (!res.ok) throw new Error(`Get preferences failed: ${res.status}`);
-  return res.json();
+  return apiFetch('/api/preferences');
 }

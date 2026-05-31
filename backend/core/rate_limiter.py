@@ -97,6 +97,43 @@ class RateLimiter:
             # Permissive fallback if Redis is unavailable
             return True, {}
 
+    async def check_identifier_rate_limit(
+        self,
+        identifier: str,
+        tier: str,
+    ) -> Tuple[bool, dict]:
+        """Check limits for non-HTTP flows such as WebSocket handshakes."""
+        if not self._redis:
+            return True, {}
+
+        max_requests, window_seconds = RATE_TIERS.get(tier, (60, 60))
+        key = f"ratelimit:{tier}:{identifier}"
+        now = time.time()
+        window_start = now - window_seconds
+
+        try:
+            pipe = self._redis.pipeline()
+            pipe.zremrangebyscore(key, 0, window_start)
+            pipe.zcard(key)
+            pipe.zadd(key, {f"{now}:{identifier}": now})
+            pipe.expire(key, window_seconds + 1)
+            results = await pipe.execute()
+            current_count = results[1]
+            remaining = max(0, max_requests - current_count - 1)
+            headers = {
+                "X-RateLimit-Limit": str(max_requests),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(int(now + window_seconds)),
+            }
+            if current_count >= max_requests:
+                retry_after = max(1, int(window_seconds))
+                headers["Retry-After"] = str(retry_after)
+                return False, headers
+            return True, headers
+        except Exception as e:
+            logger.error("rate_limit_identifier_error", error=str(e), identifier=identifier, tier=tier)
+            return True, {}
+
         tier = _get_tier_for_request(request)
         max_requests, window_seconds = RATE_TIERS.get(tier, (60, 60))
         identifier = _get_client_identifier(request, user_id)
@@ -160,3 +197,8 @@ async def check_rate_limit(request: Request, user_id: Optional[str] = None) -> N
             detail="Rate limit exceeded. Please try again later.",
             headers=headers,
         )
+
+
+async def check_websocket_rate_limit(client_ip: str, user_id: Optional[str] = None) -> Tuple[bool, dict]:
+    identifier = f"user:{user_id}" if user_id else f"ip:{client_ip or 'unknown'}"
+    return await rate_limiter.check_identifier_rate_limit(identifier, tier="websocket")

@@ -4,6 +4,7 @@ Updated to support GraphRAG paradigm (Entity extraction & community summaries).
 """
 
 import json
+import uuid
 from langchain_core.tools import tool
 from sqlalchemy import select
 from langchain_community.chat_models import ChatLiteLLM
@@ -40,6 +41,7 @@ def get_kg_tools(session_id: str):
         try:
             response = await llm.ainvoke([sys_msg, HumanMessage(content=text_content)])
             text = response.content.strip()
+            session_uuid = uuid.UUID(str(session_id))
             
             # Clean JSON markdown if present
             if text.startswith("```json"):
@@ -60,34 +62,22 @@ def get_kg_tools(session_id: str):
                 )
             
             # 2. Store entities and triples in Postgres
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
             async with async_session() as db:
                 for triple in data.get("triples", []):
                     if len(triple) == 3:
                         subj, rel, obj = triple
-                        # UPSERT subject
-                        s_stmt = (
-                            pg_insert(KnowledgeNode)
-                            .values(name=subj[:255], session_id=session_id, node_type="concept")
-                            .on_conflict_do_nothing(index_elements=["name"])
-                            .returning(KnowledgeNode.id)
+                        s_id = await _get_or_create_node_id(
+                            db,
+                            session_uuid=session_uuid,
+                            node_name=subj,
                         )
-                        res = await db.execute(s_stmt)
-                        s_row = res.first()
-                        s_id = s_row[0] if s_row else (await db.execute(select(KnowledgeNode.id).where(KnowledgeNode.name == subj[:255]))).scalar_one()
-                        
-                        # UPSERT object
-                        o_stmt = (
-                            pg_insert(KnowledgeNode)
-                            .values(name=obj[:255], session_id=session_id, node_type="concept")
-                            .on_conflict_do_nothing(index_elements=["name"])
-                            .returning(KnowledgeNode.id)
+                        o_id = await _get_or_create_node_id(
+                            db,
+                            session_uuid=session_uuid,
+                            node_name=obj,
                         )
-                        res = await db.execute(o_stmt)
-                        o_row = res.first()
-                        o_id = o_row[0] if o_row else (await db.execute(select(KnowledgeNode.id).where(KnowledgeNode.name == obj[:255]))).scalar_one()
-                        
-                        edge = KnowledgeEdge(session_id=session_id, source_id=s_id, target_id=o_id, relation=rel[:255])
+
+                        edge = KnowledgeEdge(session_id=session_uuid, source_id=s_id, target_id=o_id, relation=rel[:255])
                         db.add(edge)
                 await db.commit()
                 
@@ -113,3 +103,22 @@ def get_kg_tools(session_id: str):
             return f"Failed to query GraphRAG: {str(e)}"
 
     return [extract_and_store_knowledge, query_community_knowledge]
+
+
+async def _get_or_create_node_id(db, session_uuid: uuid.UUID, node_name: str):
+    safe_name = node_name[:255]
+    existing = (
+        await db.execute(
+            select(KnowledgeNode.id).where(
+                KnowledgeNode.session_id == session_uuid,
+                KnowledgeNode.name == safe_name,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+
+    node = KnowledgeNode(name=safe_name, session_id=session_uuid, node_type="concept")
+    db.add(node)
+    await db.flush()
+    return node.id

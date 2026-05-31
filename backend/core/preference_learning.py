@@ -1,7 +1,8 @@
 """
-Preference Learning — Updates user preferences from RLHF feedback.
-Analyzes feedback comments and ratings to learn what the user wants.
+Preference learning scoped to the authenticated user.
 """
+
+import uuid
 
 from sqlalchemy import select
 from backend.db.postgres import async_session, UserPreference, FeedbackLog
@@ -35,7 +36,7 @@ FEEDBACK_SIGNALS = {
 }
 
 
-async def learn_from_feedback(session_id: str, rating: int, comment: str):
+async def learn_from_feedback(session_id: str, rating: int, comment: str, user_id: str):
     """Analyze feedback and update user preferences.
     
     - Negative ratings (1-2): extract what went wrong from comment
@@ -61,7 +62,7 @@ async def learn_from_feedback(session_id: str, rating: int, comment: str):
     
     # Apply updates
     for key, value, confidence in updates:
-        await _upsert_preference(key, value, confidence)
+        await _upsert_preference(user_id, key, value, confidence)
     
     logger.info("feedback_learned",
                  session_id=session_id,
@@ -69,12 +70,16 @@ async def learn_from_feedback(session_id: str, rating: int, comment: str):
                  updates=[(k, v) for k, v, _ in updates])
 
 
-async def _upsert_preference(key: str, value: str, confidence: float):
+async def _upsert_preference(user_id: str, key: str, value: str, confidence: float):
     """Insert or update a user preference with blended confidence."""
     try:
+        user_uuid = uuid.UUID(str(user_id))
         async with async_session() as db:
             res = await db.execute(
-                select(UserPreference).where(UserPreference.key == key)
+                select(UserPreference).where(
+                    UserPreference.user_id == user_uuid,
+                    UserPreference.key == key,
+                )
             )
             existing = res.scalar_one_or_none()
             
@@ -90,19 +95,23 @@ async def _upsert_preference(key: str, value: str, confidence: float):
                     else:
                         existing.confidence = max(0.1, existing.confidence - 0.1)
             else:
-                db.add(UserPreference(key=key, value=value, confidence=confidence))
+                db.add(UserPreference(user_id=user_uuid, key=key, value=value, confidence=confidence))
             
             await db.commit()
     except Exception as e:
         logger.error("preference_upsert_error", key=key, error=str(e))
 
 
-async def get_user_preferences() -> dict:
+async def get_user_preferences(user_id: str) -> dict:
     """Load all user preferences as a dict."""
     try:
+        user_uuid = uuid.UUID(str(user_id))
         async with async_session() as db:
             res = await db.execute(
-                select(UserPreference).where(UserPreference.confidence >= 0.3)
+                select(UserPreference).where(
+                    UserPreference.user_id == user_uuid,
+                    UserPreference.confidence >= 0.3,
+                )
             )
             prefs = res.scalars().all()
             return {p.key: p.value for p in prefs}

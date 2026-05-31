@@ -1,0 +1,64 @@
+name: phase2-evaluation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 12 * * 1"
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: cortexai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cortexai"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:changeme@localhost:5432/cortexai
+      REDIS_URL: redis://localhost:6379/0
+      TENANT_RLS_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+          python3 -m pip install pytest pytest-asyncio pip-audit
+
+      - name: Run Phase 2 Eval Suite
+        run: python3 scripts/run_phase2_evals.py
+
+      - name: Run Queue Load Harness
+        run: python3 scripts/simulate_worker_load.py --jobs 50 --queue-name cortex:jobs:loadtest
+
+      - name: Upload Eval Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase2-eval-artifacts
+          path: artifacts/

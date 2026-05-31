@@ -313,12 +313,18 @@ def check_scope_drift(query: str, recent_actions: list[str]) -> bool:
     """Semantic Router based scope drift detection."""
     if not recent_actions or len(recent_actions) < 3:
         return False
+
+    query_terms = {term for term in re.findall(r"\b[a-zA-Z]{4,}\b", query.lower())}
+    if not query_terms:
+        return False
+    action_text = " ".join(recent_actions[-3:]).lower()
         
     try:
         from semantic_router import Route, RouteLayer
         encoder = get_encoder()
         if not encoder:
-            return False
+            overlap = sum(1 for term in query_terms if term in action_text)
+            return overlap == 0
             
         target_route = Route(
             name="core_topic",
@@ -328,7 +334,6 @@ def check_scope_drift(query: str, recent_actions: list[str]) -> bool:
         layer = RouteLayer(encoder=encoder, routes=[target_route])
         
         # Check the most recent actions
-        action_text = " ".join(recent_actions[-3:])
         route_choice = layer(action_text)
         
         # If the recent actions don't map back to the core topic route, it's drifting
@@ -339,4 +344,5 @@ def check_scope_drift(query: str, recent_actions: list[str]) -> bool:
         return False
     except Exception as e:
         logger.error("semantic_router_error", error=str(e))
-        return False
+        overlap = sum(1 for term in query_terms if term in action_text)
+        return overlap == 0

@@ -1,4 +1,18 @@
-const WS_BASE = 'ws://localhost:8000';
+import { clearAuthTokens, getApiBase, getToken } from './api';
+
+function getWebSocketBase() {
+  const apiBase = getApiBase();
+  if (apiBase.startsWith('https://')) return apiBase.replace('https://', 'wss://');
+  if (apiBase.startsWith('http://')) return apiBase.replace('http://', 'ws://');
+  return apiBase;
+}
+
+function redirectToLogin() {
+  clearAuthTokens();
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
+}
 
 export class ResearchWebSocket {
   constructor(sessionId, handlers = {}) {
@@ -10,7 +24,15 @@ export class ResearchWebSocket {
   }
 
   connect() {
-    this.ws = new WebSocket(`${WS_BASE}/ws/${this.sessionId}`);
+    const token = getToken();
+    if (!token) {
+      this.handlers.onError?.({ message: 'Authentication required' });
+      redirectToLogin();
+      return;
+    }
+
+    const url = `${getWebSocketBase()}/ws/${this.sessionId}?token=${encodeURIComponent(token)}`;
+    this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
@@ -22,7 +44,6 @@ export class ResearchWebSocket {
         const data = JSON.parse(event.data);
         this.handlers.onEvent?.(data);
 
-        // Route to specific handlers
         switch (data.type) {
           case 'thinking': this.handlers.onThinking?.(data.data); break;
           case 'tool_call': this.handlers.onToolCall?.(data.data); break;
@@ -33,22 +54,28 @@ export class ResearchWebSocket {
           case 'status': this.handlers.onStatus?.(data.data); break;
           case 'complete': this.handlers.onComplete?.(data.data); break;
           case 'error': this.handlers.onError?.(data.data); break;
+          default: break;
         }
-      } catch (e) {
-        console.error('WebSocket parse error:', e);
+      } catch (error) {
+        console.error('WebSocket parse error:', error);
       }
     };
 
-    this.ws.onclose = () => {
-      this.handlers.onClose?.();
+    this.ws.onclose = (event) => {
+      this.handlers.onClose?.(event);
+      if ([4401, 4403, 4408, 1008].includes(event.code)) {
+        this.handlers.onError?.({ message: 'Session expired or unauthorized' });
+        redirectToLogin();
+        return;
+      }
       if (this.reconnectAttempts < this.maxReconnects) {
-        this.reconnectAttempts++;
+        this.reconnectAttempts += 1;
         setTimeout(() => this.connect(), 1000 * this.reconnectAttempts);
       }
     };
 
-    this.ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
+    this.ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
       this.handlers.onError?.({ message: 'Connection error' });
     };
   }

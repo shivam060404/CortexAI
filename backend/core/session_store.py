@@ -4,6 +4,7 @@ Provides fast access to session data with PostgreSQL as source of truth.
 Sessions are cached in Redis with a 7-day TTL and auto-hydrated from DB on cache miss.
 """
 import json
+import uuid
 from typing import Optional
 from datetime import datetime, timezone
 
@@ -134,9 +135,10 @@ class SessionStore:
         """Load a single session from PostgreSQL."""
         try:
             from backend.db.postgres import async_session as db_session, ResearchSession
+            session_uuid = uuid.UUID(str(session_id))
             async with db_session() as db:
                 result = await db.execute(
-                    select(ResearchSession).where(ResearchSession.id == session_id)
+                    select(ResearchSession).where(ResearchSession.id == session_uuid)
                 )
                 row = result.scalar_one_or_none()
                 if row:
@@ -162,10 +164,11 @@ class SessionStore:
         sessions = []
         try:
             from backend.db.postgres import async_session as db_session, ResearchSession
+            user_uuid = uuid.UUID(str(user_id))
             async with db_session() as db:
                 result = await db.execute(
                     select(ResearchSession)
-                    .where(ResearchSession.user_id == user_id)
+                    .where(ResearchSession.user_id == user_uuid)
                     .order_by(ResearchSession.created_at.desc())
                 )
                 rows = result.scalars().all()

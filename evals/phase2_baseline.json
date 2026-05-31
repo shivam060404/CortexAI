@@ -1,0 +1,7 @@
+{
+  "build_rls_sql_ms": 2.5,
+  "normalize_todo_items_250_ms": 1.0,
+  "supervisor_decision_10000_ms": 3.0,
+  "worker_payload_build_10000_ms": 6.0,
+  "worker_scaling_10000_ms": 9.0
+}

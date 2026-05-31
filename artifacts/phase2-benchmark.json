@@ -1,0 +1,18 @@
+{
+  "baseline": {
+    "build_rls_sql_ms": 2.5,
+    "normalize_todo_items_250_ms": 1.0,
+    "supervisor_decision_10000_ms": 3.0,
+    "worker_payload_build_10000_ms": 6.0,
+    "worker_scaling_10000_ms": 9.0
+  },
+  "results": {
+    "build_rls_sql_ms": 0.0049,
+    "normalize_todo_items_250_ms": 0.4182,
+    "supervisor_decision_10000_ms": 0.5209,
+    "worker_payload_build_10000_ms": 2.1243,
+    "worker_scaling_10000_ms": 8.4689
+  },
+  "max_regression_pct": 5.0,
+  "regressions": {}
+}

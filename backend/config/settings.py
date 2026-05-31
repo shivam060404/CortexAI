@@ -5,7 +5,7 @@ All values are overridable via environment variables or .env file.
 
 from typing import List
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -31,15 +31,26 @@ class Settings(BaseSettings):
     SEARCH_PROVIDERS: List[str] = Field(default=["tavily", "exa", "firecrawl"])
 
     # --- Database ---
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/cortexai"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:changeme@localhost:5432/cortexai"
+    POSTGRES_PASSWORD: str = "changeme"
+    TENANT_RLS_ENABLED: bool = True
 
     # --- LanceDB ---
     LANCEDB_PERSIST_DIR: str = "./data/lancedb"
 
     # --- Redis ---
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://:changeme@localhost:6379/0"
+    REDIS_PASSWORD: str = "changeme"
     CACHE_SEARCH_TTL: int = 3600        # 1 hour
     CACHE_EMBEDDING_TTL: int = 86400    # 24 hours
+    WORKER_QUEUE_NAME: str = "cortex:jobs:research"
+    WORKER_POLL_TIMEOUT_SECONDS: int = 5
+    WORKER_READINESS_FILE: str = "./data/worker.ready"
+    WORKER_HEARTBEAT_FILE: str = "./data/worker.heartbeat"
+    WORKER_MIN_REPLICAS: int = 2
+    WORKER_MAX_REPLICAS: int = 12
+    WORKER_TARGET_CPU_UTILIZATION_PCT: int = 70
+    WORKER_TARGET_QUEUE_DEPTH_PER_POD: int = 10
 
     # --- Workspace (Local FS) ---
     WORKSPACE_ROOT: str = "./data/workspaces"
@@ -98,7 +109,10 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_SECRET: str = ""
 
     # --- CORS ---
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    CORS_ORIGINS: List[str] = Field(default_factory=lambda: [
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ])
 
     # --- Retry / Resilience ---
     MAX_RETRIES: int = 3
@@ -120,6 +134,13 @@ class Settings(BaseSettings):
     GUARD_ENABLE_INJECTION_SHIELD: bool = True
     GUARD_ENABLE_OUTPUT_MODERATION: bool = True
     GUARD_SCOPE_DRIFT_THRESHOLD: int = 5 # Check every 5 iterations
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, value):
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
     model_config = {
         "env_file": ".env",
