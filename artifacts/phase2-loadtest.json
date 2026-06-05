@@ -1,0 +1,52 @@
+{
+  "mode": "queue",
+  "queue_name": "cortex:jobs:loadtest",
+  "jobs_enqueued": 25,
+  "worker_count": 2,
+  "job_duration_ms": 25,
+  "drain_timeout_seconds": 30.0,
+  "before_metrics": {
+    "queue_name": "cortex:jobs:loadtest",
+    "pending_depth": 0,
+    "processing_depth": 0,
+    "dead_letter_depth": 0,
+    "active_workers": 0,
+    "queue_depth_per_pod": 0.0,
+    "desired_replicas": 2,
+    "target_queue_depth_per_pod": 10
+  },
+  "after_enqueue_metrics": {
+    "queue_name": "cortex:jobs:loadtest",
+    "pending_depth": 25,
+    "processing_depth": 0,
+    "dead_letter_depth": 0,
+    "active_workers": 0,
+    "queue_depth_per_pod": 25.0,
+    "desired_replicas": 3,
+    "target_queue_depth_per_pod": 10
+  },
+  "final_metrics": {
+    "queue_name": "cortex:jobs:loadtest",
+    "pending_depth": 0,
+    "processing_depth": 0,
+    "dead_letter_depth": 0,
+    "active_workers": 2,
+    "queue_depth_per_pod": 0.0,
+    "desired_replicas": 2,
+    "target_queue_depth_per_pod": 10
+  },
+  "processed_jobs": 25,
+  "drain_completed": true,
+  "scaling": {
+    "queue_depth": 25,
+    "current_replicas": 2,
+    "desired_replicas": 3,
+    "scale_direction": "up",
+    "queue_pressure_replicas": 3,
+    "cpu_pressure_replicas": 2,
+    "target_queue_depth_per_pod": 10,
+    "target_cpu_utilization_pct": 70,
+    "cpu_utilization_pct": null,
+    "bounded_by": null
+  }
+}

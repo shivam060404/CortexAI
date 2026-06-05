@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     WORKER_POLL_TIMEOUT_SECONDS: int = 5
     WORKER_READINESS_FILE: str = "./data/worker.ready"
     WORKER_HEARTBEAT_FILE: str = "./data/worker.heartbeat"
+    WORKER_LEASE_SECONDS: int = 120
+    WORKER_LEASE_RENEW_INTERVAL_SECONDS: int = 30
+    WORKER_HEARTBEAT_TTL_SECONDS: int = 90
+    WORKER_METRICS_HOST: str = "0.0.0.0"
+    WORKER_METRICS_PORT: int = 9102
     WORKER_MIN_REPLICAS: int = 2
     WORKER_MAX_REPLICAS: int = 12
     WORKER_TARGET_CPU_UTILIZATION_PCT: int = 70

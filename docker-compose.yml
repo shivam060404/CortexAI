@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   cortex-api:
     build: .
@@ -54,6 +52,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6379:6379"
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
       - REDIS_ARGS=--requirepass ${REDIS_PASSWORD:-changeme}

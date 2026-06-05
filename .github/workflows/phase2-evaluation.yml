@@ -53,8 +53,15 @@ jobs:
       - name: Run Phase 2 Eval Suite
         run: python3 scripts/run_phase2_evals.py
 
+      - name: Start Redis For Worker Load Test
+        run: docker compose up -d redis
+
       - name: Run Queue Load Harness
-        run: python3 scripts/simulate_worker_load.py --jobs 50 --queue-name cortex:jobs:loadtest
+        run: python3 scripts/simulate_worker_load.py --jobs 50 --queue-name cortex:jobs:loadtest --worker-count 2 --job-duration-ms 25 --drain-timeout-seconds 30
+
+      - name: Stop Redis After Worker Load Test
+        if: always()
+        run: docker compose stop redis
 
       - name: Upload Eval Artifacts
         if: always()

@@ -154,16 +154,19 @@ def create_app() -> FastAPI:
 
         queue_depth = None
         autoscaling = None
+        queue_metrics = None
         try:
             from backend.core.job_queue import job_queue
-            from backend.core.worker_scaling import calculate_desired_worker_replicas
 
             if job_queue._redis is not None:
-                queue_depth = await job_queue.depth()
-                autoscaling = calculate_desired_worker_replicas(
-                    queue_depth=queue_depth,
-                    current_replicas=settings.WORKER_MIN_REPLICAS,
-                )
+                queue_metrics = await job_queue.queue_metrics()
+                queue_depth = queue_metrics["pending_depth"]
+                autoscaling = {
+                    "desired_replicas": queue_metrics["desired_replicas"],
+                    "target_queue_depth_per_pod": queue_metrics["target_queue_depth_per_pod"],
+                    "active_workers": queue_metrics["active_workers"],
+                    "queue_depth_per_pod": queue_metrics["queue_depth_per_pod"],
+                }
         except Exception as exc:
             logger.warning("readiness_queue_depth_check_failed", error=str(exc))
 
@@ -171,6 +174,7 @@ def create_app() -> FastAPI:
             "status": "ready",
             "checks": checks,
             "queue_depth": queue_depth,
+            "queue_metrics": queue_metrics,
             "worker_autoscaling": autoscaling,
         }
 

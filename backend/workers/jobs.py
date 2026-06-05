@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from langchain_core.messages import HumanMessage
 
 from backend.core.graph import build_graph
@@ -11,6 +13,7 @@ from backend.db.tenant import tenant_context
 logger = get_logger(__name__)
 
 BACKGROUND_WATCH_JOB = "background_watch"
+LOAD_TEST_JOB = "load_test"
 
 
 def build_background_watch_payload(
@@ -27,6 +30,23 @@ def build_background_watch_payload(
         "organization_id": organization_id or user_id,
         "role": role,
         "topic": topic,
+    }
+
+
+def build_load_test_payload(
+    *,
+    session_id: str,
+    user_id: str,
+    organization_id: str | None = None,
+    role: str = "analyst",
+    sleep_ms: int = 10,
+) -> dict:
+    return {
+        "session_id": session_id,
+        "user_id": user_id,
+        "organization_id": organization_id or user_id,
+        "role": role,
+        "sleep_ms": max(0, int(sleep_ms)),
     }
 
 
@@ -69,6 +89,22 @@ def build_worker_initial_state(session_id: str, query: str) -> dict:
 async def execute_job(job: dict) -> None:
     job_type = job.get("type")
     payload = job.get("payload", {})
+
+    if job_type == LOAD_TEST_JOB:
+        user_id = payload["user_id"]
+        organization_id = payload.get("organization_id") or user_id
+        role = payload.get("role", "analyst")
+        sleep_ms = int(payload.get("sleep_ms", 10) or 0)
+        with tenant_context(
+            organization_id=organization_id,
+            user_id=user_id,
+            role=role,
+            source="worker",
+        ):
+            logger.info("worker_load_test_started", job_id=job.get("id"), sleep_ms=sleep_ms)
+            await asyncio.sleep(sleep_ms / 1000.0)
+            logger.info("worker_load_test_completed", job_id=job.get("id"), sleep_ms=sleep_ms)
+        return
 
     if job_type != BACKGROUND_WATCH_JOB:
         logger.warning("worker_job_unknown", job_type=job_type, job_id=job.get("id"))
