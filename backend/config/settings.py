@@ -190,6 +190,28 @@ class Settings(BaseSettings):
     # --- Organization (Feature Gap #1) ---
     ORGANIZATION_ENABLED: bool = True
 
+    # --- Secrets Manager (Phase 0) ---
+    SECRETS_BACKEND: str = "env"              # env | vault | aws
+    VAULT_ADDR: str = "http://localhost:8200"
+    VAULT_TOKEN: str = ""
+    VAULT_SECRET_PATH: str = "secret/data/cortexai"
+    AWS_REGION: str = "us-east-1"
+    AWS_SECRET_NAME: str = "cortexai/secrets"
+
+    # --- ML Classifier (Phase 0) ---
+    ML_CLASSIFIER_MODE: str = "heuristic"     # heuristic | ml
+    ML_CLASSIFIER_MODEL: str = "deepset/deberta-v3-base-injection"
+
+    # --- Enterprise SSO / OIDC (Phase 4) ---
+    SSO_ISSUER: str = ""                     # e.g., https://your-org.okta.com
+    SSO_CLIENT_ID: str = ""
+    SSO_CLIENT_SECRET: str = ""
+    SSO_EMAIL_CLAIM: str = "email"
+    SSO_NAME_CLAIM: str = "name"
+    SSO_GROUPS_CLAIM: str = "groups"
+    SSO_AUTO_PROVISION: bool = True
+    SSO_DEFAULT_ROLE: str = "member"
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _parse_cors_origins(cls, value):

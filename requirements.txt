@@ -64,3 +64,11 @@ email-validator>=2.2.0
 
 # Session Persistence
 langgraph-checkpoint-postgres>=1.0.0
+
+# --- Secrets Management (optional backends) ---
+hvac>=2.1.0              # HashiCorp Vault client
+boto3>=1.34.0            # AWS Secrets Manager
+
+# --- ML Classifier (optional, for production injection detection) ---
+# transformers>=4.40.0   # Uncomment to enable ML mode (requires torch)
+# torch>=2.1.0           # Uncomment to enable ML mode

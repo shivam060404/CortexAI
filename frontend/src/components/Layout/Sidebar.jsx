@@ -24,6 +24,8 @@ const NAV_GROUPS = [
       { path: '/knowledge', icon: '🧠', label: 'Knowledge Graph' },
       { path: '/experiments', icon: '🧪', label: 'Experiments' },
       { path: '/observability', icon: '📡', label: 'Observability' },
+      { path: '/workflow', icon: '⚡', label: 'Workflow Builder' },
+      { path: '/webcompare', icon: '🔗', label: 'Web Compare' },
     ],
   },
   {

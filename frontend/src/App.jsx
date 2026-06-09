@@ -10,6 +10,8 @@ import Experiments from './pages/Experiments/Experiments';
 import Observability from './pages/Observability/Observability';
 import KnowledgeGraph from './pages/KnowledgeGraph/KnowledgeGraph';
 import Settings from './pages/Settings/Settings';
+import Workflow from './pages/Workflow/Workflow';
+import WebCompare from './pages/WebCompare/WebCompare';
 import Login from './pages/Login/Login';
 
 export default function App() {
@@ -27,6 +29,8 @@ export default function App() {
             <Route path="/experiments" element={<Experiments />} />
             <Route path="/observability" element={<Observability />} />
             <Route path="/knowledge" element={<KnowledgeGraph />} />
+            <Route path="/workflow" element={<Workflow />} />
+            <Route path="/webcompare" element={<WebCompare />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
         </Route>

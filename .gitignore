@@ -1,0 +1,70 @@
+# =============================================================================
+# CortexAI — Root .gitignore
+# =============================================================================
+
+# --- Environment & Secrets (NEVER commit credentials) ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
+vault-token
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+.venv/
+venv/
+env/
+
+# --- Testing & Coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# --- Data (runtime generated, never commit) ---
+data/lancedb/
+data/workspaces/
+data/worker.*
+*.sqlite3
+*.db
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- Artifacts (CI-generated) ---
+artifacts/*.json
+!artifacts/.gitkeep
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Misc ---
+*.bak
+*.tmp
+.cache/

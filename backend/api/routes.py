@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -1190,6 +1191,232 @@ async def harness_score_endpoint(
     """Get detailed Agent Harness pillar scoring."""
     from backend.core.harness import agent_harness
     return agent_harness.get_total_harness_score()
+
+
+# ─── Search Orchestration Endpoints (Phase 3) ───
+
+
+@router.post("/api/search/batch")
+async def batch_search(
+    req: dict,
+    user: User = Depends(get_current_active_user),
+):
+    """Execute batch search with multiple queries in parallel."""
+    from backend.core.search_orchestrator import search_orchestrator, SearchQuery, SearchDepth, SearchPriority
+
+    queries_raw = req.get("queries", [])
+    if not queries_raw:
+        raise HTTPException(status_code=400, detail="queries array is required")
+
+    queries = []
+    for q in queries_raw:
+        if isinstance(q, str):
+            queries.append(SearchQuery(text=q))
+        elif isinstance(q, dict):
+            queries.append(SearchQuery(
+                text=q.get("text", q.get("query", "")),
+                priority=SearchPriority(q.get("priority", "normal")),
+                depth=SearchDepth(q.get("depth", "standard")),
+                category=q.get("category", "web"),
+            ))
+
+    max_concurrent = req.get("max_concurrent", 5)
+    result = await search_orchestrator.execute_batch(queries, max_concurrent=max_concurrent)
+    return {
+        "total_queries": result.total_queries,
+        "successful": result.successful_queries,
+        "failed": result.failed_queries,
+        "unique_urls": result.unique_urls,
+        "duration_ms": result.total_duration_ms,
+        "results": [
+            {"url": r.url, "title": r.title, "content": r.content[:500],
+             "score": r.score, "source": r.source}
+            for r in result.results[:50]
+        ],
+    }
+
+
+@router.post("/api/search/deep")
+async def deep_search(
+    req: dict,
+    user: User = Depends(get_current_active_user),
+):
+    """Execute iterative deep search with automatic follow-up generation."""
+    from backend.core.search_orchestrator import search_orchestrator
+
+    query = req.get("query", "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    max_depth = min(req.get("max_depth", 3), 5)
+    follow_ups = min(req.get("follow_ups_per_level", 3), 5)
+    category = req.get("category", "web")
+
+    result = await search_orchestrator.execute_deep(
+        initial_query=query, max_depth=max_depth,
+        follow_ups_per_level=follow_ups, category=category,
+    )
+    return {
+        "total_queries": result.total_queries,
+        "successful": result.successful_queries,
+        "unique_urls": result.unique_urls,
+        "duration_ms": result.total_duration_ms,
+        "results": [
+            {"url": r.url, "title": r.title, "content": r.content[:500],
+             "score": r.score, "source": r.source, "depth": r.depth_level}
+            for r in result.results[:100]
+        ],
+    }
+
+
+# ─── Predictive Research Planning Endpoints (Phase 4) ───
+
+
+@router.post("/api/planning/predict")
+async def predict_research_topics(
+    req: dict,
+    user: User = Depends(get_current_active_user),
+):
+    """Predict next research topics based on session history."""
+    from backend.core.predictive_planner import predictive_planner
+
+    session_history = req.get("session_history", [])
+    result = await predictive_planner.predict_next_topics(str(user.id), session_history)
+    return {
+        "predicted_topics": [
+            {"topic": t.topic, "confidence": t.confidence, "related": t.related_topics}
+            for t in result.predicted_topics
+        ],
+        "knowledge_gaps": [
+            {"topic": g.topic, "reason": g.reason, "priority": g.priority, "suggested_queries": g.suggested_queries}
+            for g in result.knowledge_gaps
+        ],
+        "research_score": result.research_score,
+        "insights": result.insights,
+    }
+
+
+@router.post("/api/planning/generate")
+async def generate_research_plan(
+    req: dict,
+    user: User = Depends(get_current_active_user),
+):
+    """Generate a structured research plan for a topic."""
+    from backend.core.predictive_planner import predictive_planner
+
+    topic = req.get("topic", "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="topic is required")
+
+    depth = req.get("depth", "default")
+    plan = await predictive_planner.generate_research_plan(topic, depth=depth)
+    return {
+        "title": plan.title,
+        "description": plan.description,
+        "estimated_time": plan.estimated_total_time,
+        "difficulty": plan.difficulty,
+        "prerequisites": plan.prerequisites,
+        "milestones": [
+            {"title": m.title, "description": m.description, "time": m.estimated_time,
+             "queries": m.queries, "order": m.order, "dependencies": m.dependencies}
+            for m in plan.milestones
+        ],
+    }
+
+
+@router.post("/api/planning/suggest")
+async def suggest_research_plans(
+    req: dict,
+    user: User = Depends(get_current_active_user),
+):
+    """Suggest research plans based on predicted topics."""
+    from backend.core.predictive_planner import predictive_planner
+
+    session_history = req.get("session_history", [])
+    plans = await predictive_planner.suggest_research_plans(str(user.id), session_history)
+    return {
+        "plans": [
+            {"title": p.title, "description": p.description, "estimated_time": p.estimated_total_time,
+             "difficulty": p.difficulty, "milestone_count": len(p.milestones),
+             "milestones": [{"title": m.title, "description": m.description}
+                            for m in p.milestones]}
+            for p in plans
+        ],
+    }
+
+
+# ─── Collected Pages Endpoints (Phase 3 — Web Compare) ───
+
+# In-memory store for collected pages (per-user, backed by Redis in production)
+_collected_pages: dict[str, list[dict]] = {}
+
+
+@router.post("/api/context/pages")
+async def collect_pages(req: dict, user: User = Depends(get_current_active_user)):
+    """Collect page data from Chrome extension for comparison."""
+    uid = str(user.id)
+    pages = req.get("pages", [])
+    action = req.get("action", "collect")
+
+    if uid not in _collected_pages:
+        _collected_pages[uid] = []
+
+    if action == "collect":
+        for page in pages:
+            # Deduplicate by URL
+            _collected_pages[uid] = [p for p in _collected_pages[uid] if p.get("url") != page.get("url")]
+            _collected_pages[uid].insert(0, {**page, "collected_at": time.time()})
+        # Cap at 50 pages
+        _collected_pages[uid] = _collected_pages[uid][:50]
+        return {"collected": len(pages), "total": len(_collected_pages[uid])}
+
+    elif action == "compare":
+        comparison = req.get("comparison", {})
+        return {"received": True, "pages": len(pages), "comparison": comparison}
+
+    return {"status": "ok"}
+
+
+@router.get("/api/context/collected-pages")
+async def get_collected_pages(user: User = Depends(get_current_active_user)):
+    """Get all collected pages for the current user."""
+    uid = str(user.id)
+    return {"pages": _collected_pages.get(uid, [])}
+
+
+@router.post("/api/context/compare")
+async def compare_collected_pages(
+    req: dict,
+    user: User = Depends(get_current_active_user),
+):
+    """Compare selected pages and generate analysis."""
+    uid = str(user.id)
+    urls = req.get("urls", [])
+    user_pages = _collected_pages.get(uid, [])
+
+    selected = [p for p in user_pages if p.get("url") in urls] if urls else user_pages[:5]
+
+    if len(selected) < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 pages to compare")
+
+    # Generate comparison
+    all_tags = {}
+    for p in selected:
+        for tag in p.get("tags", []):
+            all_tags[tag] = all_tags.get(tag, 0) + 1
+
+    common_tags = [{"tag": t, "count": c} for t, c in all_tags.items() if c >= 2]
+    unique_tags = [t for t, c in all_tags.items() if c == 1]
+
+    return {
+        "pages": selected,
+        "common_tags": common_tags,
+        "unique_tags": unique_tags,
+        "summary": {
+            "page_count": len(selected),
+            "total_word_count": sum(p.get("wordCount", 0) for p in selected),
+        },
+    }
 
 
 @router.websocket("/ws/{session_id}")

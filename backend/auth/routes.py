@@ -20,6 +20,7 @@ from backend.auth.oauth import (
     get_github_auth_url,
     handle_github_callback,
 )
+from backend.auth.enterprise_sso import enterprise_sso, OIDCProviderConfig
 from backend.auth.dependencies import get_current_active_user
 from backend.auth.api_keys import generate_api_key_pair
 from backend.api.schemas import RegisterRequest, LoginRequest, OAuthCallbackRequest, UserResponse
@@ -304,3 +305,68 @@ async def rotate_key(key_id: str, current_user: User = Depends(get_current_activ
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ─── Enterprise SSO / OIDC Endpoints (Phase 4) ───
+
+
+@router.get("/sso")
+async def sso_login(redirect_uri: str):
+    """Get Enterprise SSO authorization URL (generic OIDC provider)."""
+    if not enterprise_sso._config.is_configured:
+        raise HTTPException(status_code=501, detail="Enterprise SSO not configured. Set SSO_ISSUER, SSO_CLIENT_ID, SSO_CLIENT_SECRET.")
+
+    if not enterprise_sso._discovered:
+        await enterprise_sso.discover()
+
+    auth_url, state, code_verifier = enterprise_sso.get_authorization_url(redirect_uri)
+    return {"auth_url": auth_url, "state": state, "code_verifier": code_verifier}
+
+
+@router.post("/sso/callback", response_model=TokenResponse)
+async def sso_callback(req: dict):
+    """Handle Enterprise SSO callback."""
+    code = req.get("code", "")
+    redirect_uri = req.get("redirect_uri", "")
+    code_verifier = req.get("code_verifier", "")
+
+    if not code or not redirect_uri or not code_verifier:
+        raise HTTPException(status_code=400, detail="Missing code, redirect_uri, or code_verifier")
+
+    user_info = await enterprise_sso.handle_callback(code, redirect_uri, code_verifier)
+    if not user_info:
+        raise HTTPException(status_code=400, detail="Failed to retrieve user info from SSO provider")
+
+    user, tokens = await enterprise_sso.find_or_create_user(user_info)
+    if not user or not tokens:
+        raise HTTPException(status_code=403, detail="SSO authentication failed or user provisioning disabled")
+
+    logger.info("sso_login_success", email=user.email, provider="oidc")
+    await audit_logger.log("login", user_id=str(user.id), details={"provider": "sso_oidc", "email": user.email})
+    return tokens
+
+
+@router.get("/sso/discover")
+async def sso_discover(current_user: User = Depends(get_current_active_user)):
+    """Trigger OIDC discovery and return endpoint configuration."""
+    success = await enterprise_sso.discover()
+    if not success:
+        raise HTTPException(status_code=500, detail="OIDC discovery failed")
+    config = enterprise_sso._config
+    return {
+        "issuer": config.issuer,
+        "authorization_endpoint": config.authorization_endpoint,
+        "token_endpoint": config.token_endpoint,
+        "userinfo_endpoint": config.userinfo_endpoint,
+        "jwks_uri": config.jwks_uri,
+        "end_session_endpoint": config.end_session_endpoint,
+    }
+
+
+@router.get("/sso/logout")
+async def sso_logout(redirect_uri: str, id_token: str = ""):
+    """Get the SSO logout URL."""
+    logout_url = enterprise_sso.get_logout_url(redirect_uri, id_token or None)
+    if not logout_url:
+        raise HTTPException(status_code=501, detail="SSO end_session_endpoint not available")
+    return {"logout_url": logout_url}
