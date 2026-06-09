@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from backend.core.logger import get_logger
 from backend.core.trust_engine import TrustEngine
 from backend.core.knowledge_versioning import version_tracker
+from backend.config import settings
 
 logger = get_logger(__name__)
 
@@ -30,13 +31,30 @@ class ContextGraph:
     """
     Central Operating System Graph for CortexAI.
     Manages Nodes (Entities, Sources, Findings) and Edges (Relationships).
-    Uses NetworkX for in-memory traversal and representation.
+
+    Supports pluggable backends (Arch Issue #1):
+      - ``memory`` (default): NetworkX in-process MultiDiGraph
+      - ``redis``: Redis-backed graph for horizontal scaling
+
+    The sync NetworkX API is retained for backward compatibility with
+    existing graph.py callers; when ``GRAPH_BACKEND=redis`` the sync
+    methods still operate on a local NetworkX mirror while async
+    ``a_*`` methods persist to Redis.
     """
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, backend=None):
         self.session_id = session_id
         self.graph = nx.MultiDiGraph()
         self.trust_engine = TrustEngine()
-        logger.info("context_graph_initialized", session_id=self.session_id)
+
+        # Pluggable backend (async-capable)
+        if backend is not None:
+            self._backend = backend
+        else:
+            self._backend = None  # None = pure NetworkX (legacy path)
+
+        logger.info("context_graph_initialized",
+                     session_id=self.session_id,
+                     backend=type(self._backend).__name__ if self._backend else "networkx")
         
         # Initialize root node for the session
         self.add_node("Session", {"session_id": session_id}, node_id=f"session_{session_id}")
@@ -63,6 +81,19 @@ class ContextGraph:
                 
         node = GraphNode(id=node_id, type=node_type, properties=properties, version=version)
         self.graph.add_node(node.id, data=node)
+
+        # Mirror to pluggable backend if present
+        if self._backend is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._backend.add_node(
+                    node_id,
+                    {"type": node_type, "properties": properties, "version": version,
+                     "created_at": node.created_at, "updated_at": node.updated_at},
+                ))
+            except RuntimeError:
+                pass  # No running loop; sync-only usage
         
         # Track version
         version_tracker.track_change(node_id, properties, agent_name="ContextGraphSystem")
@@ -80,6 +111,18 @@ class ContextGraph:
             
         edge = GraphEdge(source_id=source_id, target_id=target_id, type=edge_type, properties=properties)
         self.graph.add_edge(source_id, target_id, key=edge_type, data=edge)
+
+        # Mirror to pluggable backend if present
+        if self._backend is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._backend.add_edge(
+                    source_id, target_id, edge_type,
+                    {"properties": properties, "created_at": edge.created_at},
+                ))
+            except RuntimeError:
+                pass
         
         logger.debug("graph_edge_added", source=source_id, target=target_id, type=edge_type)
         return edge
@@ -111,3 +154,18 @@ class ContextGraph:
     def to_json(self) -> Dict[str, Any]:
         """Serialize the graph for persistence."""
         return nx.node_link_data(self.graph)
+
+    # ------------------------------------------------------------------
+    # Async API — delegates to pluggable backend when available
+    # ------------------------------------------------------------------
+
+    async def async_get_neighbors(self, node_id: str, depth: int = 2) -> Dict[str, Any]:
+        """Async subgraph extraction via the pluggable backend."""
+        if self._backend is not None:
+            return await self._backend.get_neighbors(node_id, depth=depth)
+        return self.get_subgraph_context(node_id, depth=depth)
+
+    async def async_to_json(self) -> Dict[str, Any]:
+        if self._backend is not None:
+            return await self._backend.to_json()
+        return self.to_json()

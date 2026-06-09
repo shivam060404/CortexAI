@@ -15,6 +15,7 @@ from backend.auth.dependencies import get_optional_user_from_request
 from backend.core.audit import audit_logger
 from backend.core.logger import get_logger
 from backend.core.rate_limiter import check_rate_limit
+from backend.config import settings
 from backend.db.tenant import bind_tenant_context, bind_user_tenant_context, reset_tenant_context
 
 logger = get_logger(__name__)
@@ -49,6 +50,27 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self' 'unsafe-inline';"
         )
         return response
+
+
+class RequestBodyLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests with body size exceeding MAX_REQUEST_BODY_SIZE (Security #4)."""
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > settings.MAX_REQUEST_BODY_SIZE:
+            logger.warning(
+                "request_body_too_large",
+                content_length=int(content_length),
+                limit=settings.MAX_REQUEST_BODY_SIZE,
+                path=request.url.path,
+            )
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "detail": f"Request body too large. Maximum allowed: {settings.MAX_REQUEST_BODY_SIZE} bytes."
+                },
+            )
+        return await call_next(request)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

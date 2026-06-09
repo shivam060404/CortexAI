@@ -49,6 +49,8 @@ tenacity
 pydantic-ai
 apscheduler
 python-pptx
+python-docx
+weasyprint
 matplotlib
 pandas
 

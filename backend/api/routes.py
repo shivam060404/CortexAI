@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from langchain_core.messages import HumanMessage
-from sqlalchemy import func, or_, select, update as sa_update
+from sqlalchemy import func, or_, select, update as sa_update, Integer
 
 from backend.api.schemas import (
     ContextInjectRequest,
@@ -31,10 +32,14 @@ from backend.core.graph import build_graph, cleanup_session, get_execution_metri
 from backend.core.guardrails import scan_llm_output, scan_user_input, verify_citations
 from backend.core.logger import get_logger
 from backend.core.preference_learning import get_user_preferences, learn_from_feedback
+from backend.core.telemetry import trace_session, record_session_cost
+from backend.core.report_sharing import create_share_link, get_shared_report, list_share_links, revoke_share_link
+from backend.core.content_policy import check_content_policy
 from backend.core.rate_limiter import check_websocket_rate_limit
 from backend.core.scheduler import schedule_watch
 from backend.core.session_store import session_store
 from backend.core.supervisor_events import extract_supervisor_stream_messages
+from backend.config import settings as _ws_settings
 from backend.db.postgres import (
     AgentTrace,
     ExperimentTrack,
@@ -597,6 +602,76 @@ async def align_research_query(req: dict, current_user: User = Depends(get_curre
     }
 
 
+@router.get("/api/sessions/{session_id}/export/{fmt}")
+async def export_session_report(
+    session_id: str,
+    fmt: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Export a session report as PDF or DOCX (Feature Gap #4)."""
+    from fastapi.responses import FileResponse
+
+    await _require_owned_session(session_id, current_user)
+    if fmt not in ("pdf", "docx"):
+        raise HTTPException(status_code=400, detail="Supported formats: pdf, docx")
+
+    try:
+        report_md = _workspace.read_file(session_id, "report.md")
+    except Exception:
+        raise HTTPException(status_code=404, detail="No report found for this session")
+
+    title = session_id[:8]
+    session = await session_store.get(session_id)
+    if session:
+        title = session.get("title", session_id[:8])
+
+    if fmt == "pdf":
+        filename = f"report_{session_id[:8]}.pdf"
+        try:
+            from weasyprint import HTML
+            from backend.tools.export_tools import _markdown_to_html
+            html_body = _markdown_to_html(report_md, title)
+            html_doc = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><style>
+body{{font-family:Arial,sans-serif;margin:40px;line-height:1.6}}
+h1{{color:#1a1a2e}}h2{{color:#16213e}}h3{{color:#0f3460}}
+</style></head><body>{html_body}</body></html>"""
+            workspace_dir = _workspace.get_workspace_path(session_id)
+            file_path = os.path.join(workspace_dir, filename)
+            HTML(string=html_doc).write_pdf(file_path)
+            return FileResponse(file_path, media_type="application/pdf", filename=filename)
+        except ImportError:
+            raise HTTPException(status_code=501, detail="PDF export not available on this server")
+    else:
+        filename = f"report_{session_id[:8]}.docx"
+        try:
+            from docx import Document
+            from docx.shared import Pt as DocxPt
+            doc = Document()
+            doc.add_heading(title, level=0)
+            for line in report_md.split("\n"):
+                s = line.strip()
+                if not s:
+                    continue
+                elif s.startswith("## "):
+                    doc.add_heading(s[3:].replace("**", "").strip(), level=2)
+                elif s.startswith("### "):
+                    doc.add_heading(s[4:].replace("**", "").strip(), level=3)
+                elif s.startswith(("- ", "* ")):
+                    doc.add_paragraph(s[2:].replace("**", "").strip(), style="List Bullet")
+                else:
+                    doc.add_paragraph(s.replace("**", "").strip())
+            workspace_dir = _workspace.get_workspace_path(session_id)
+            file_path = os.path.join(workspace_dir, filename)
+            doc.save(file_path)
+            return FileResponse(
+                file_path,
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                filename=filename,
+            )
+        except ImportError:
+            raise HTTPException(status_code=501, detail="DOCX export not available on this server")
+
+
 @router.post("/api/feedback")
 async def submit_feedback(req: dict, current_user: User = Depends(get_current_active_user)):
     session_id = req.get("session_id", "")
@@ -636,10 +711,492 @@ async def get_preferences(current_user: User = Depends(get_current_active_user))
     return {"preferences": prefs}
 
 
+# ─── Analytics Dashboard API (Task 14c) ───
+
+
+@router.get("/api/analytics/usage")
+async def analytics_usage(
+    days: int = 30,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Session count, tokens used, and estimated cost over time."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    user_uuid = uuid.UUID(str(current_user.id))
+
+    try:
+        async with async_session() as db:
+            res = await db.execute(
+                select(
+                    func.count().label("total_sessions"),
+                    func.coalesce(func.sum(ResearchSession.tokens_used), 0).label("total_tokens"),
+                    func.coalesce(func.sum(ResearchSession.tool_calls_count), 0).label("total_tool_calls"),
+                    func.coalesce(func.sum(ResearchSession.iterations_used), 0).label("total_iterations"),
+                ).where(
+                    ResearchSession.user_id == user_uuid,
+                    ResearchSession.created_at >= cutoff,
+                )
+            )
+            row = res.one()
+
+        total_tokens = int(row.total_tokens or 0)
+        # Estimate cost from settings
+        from backend.config import settings as _s
+        estimated_cost = (
+            (total_tokens * 0.5 * _s.COST_PER_1M_INPUT_TOKENS / 1_000_000) +
+            (total_tokens * 0.5 * _s.COST_PER_1M_OUTPUT_TOKENS / 1_000_000)
+        )
+
+        return {
+            "period_days": days,
+            "total_sessions": int(row.total_sessions or 0),
+            "total_tokens": total_tokens,
+            "total_tool_calls": int(row.total_tool_calls or 0),
+            "total_iterations": int(row.total_iterations or 0),
+            "estimated_cost_usd": round(estimated_cost, 4),
+        }
+    except Exception as e:
+        logger.error("analytics_usage_error", error=str(e))
+        return {"period_days": days, "total_sessions": 0, "total_tokens": 0,
+                "total_tool_calls": 0, "total_iterations": 0, "estimated_cost_usd": 0}
+
+
+@router.get("/api/analytics/costs")
+async def analytics_costs(
+    days: int = 30,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Per-session cost breakdown."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    user_uuid = uuid.UUID(str(current_user.id))
+
+    try:
+        from backend.config import settings as _s
+        async with async_session() as db:
+            res = await db.execute(
+                select(ResearchSession)
+                .where(
+                    ResearchSession.user_id == user_uuid,
+                    ResearchSession.created_at >= cutoff,
+                )
+                .order_by(ResearchSession.created_at.desc())
+                .limit(50)
+            )
+            sessions = res.scalars().all()
+
+        breakdown = []
+        for s in sessions:
+            tokens = s.tokens_used or 0
+            cost = (
+                (tokens * 0.5 * _s.COST_PER_1M_INPUT_TOKENS / 1_000_000) +
+                (tokens * 0.5 * _s.COST_PER_1M_OUTPUT_TOKENS / 1_000_000)
+            )
+            breakdown.append({
+                "session_id": str(s.id),
+                "title": s.title[:60],
+                "tokens_used": tokens,
+                "iterations": s.iterations_used or 0,
+                "tool_calls": s.tool_calls_count or 0,
+                "estimated_cost_usd": round(cost, 4),
+                "status": s.status.value if hasattr(s.status, "value") else str(s.status),
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            })
+
+        return {"period_days": days, "sessions": breakdown}
+    except Exception as e:
+        logger.error("analytics_costs_error", error=str(e))
+        return {"period_days": days, "sessions": []}
+
+
+@router.get("/api/analytics/performance")
+async def analytics_performance(
+    days: int = 30,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Average latency, success rates, and iteration statistics."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    user_uuid = uuid.UUID(str(current_user.id))
+
+    try:
+        async with async_session() as db:
+            # Session status distribution
+            status_res = await db.execute(
+                select(
+                    ResearchSession.status,
+                    func.count().label("count"),
+                    func.coalesce(func.avg(ResearchSession.iterations_used), 0).label("avg_iterations"),
+                    func.coalesce(func.avg(ResearchSession.tokens_used), 0).label("avg_tokens"),
+                )
+                .where(
+                    ResearchSession.user_id == user_uuid,
+                    ResearchSession.created_at >= cutoff,
+                )
+                .group_by(ResearchSession.status)
+            )
+            status_rows = status_res.all()
+
+            # Agent trace latency stats
+            owned_ids = _owned_session_ids_query(current_user)
+            trace_res = await db.execute(
+                select(
+                    func.count().label("total_traces"),
+                    func.coalesce(func.avg(AgentTrace.latency_ms), 0).label("avg_latency_ms"),
+                    func.coalesce(func.sum(func.cast(AgentTrace.is_error, Integer)), 0).label("error_count"),
+                )
+                .where(AgentTrace.session_id.in_(owned_ids))
+            )
+            trace_row = trace_res.one()
+
+        status_dist = {}
+        total_sessions = 0
+        for row in status_rows:
+            status_val = row.status.value if hasattr(row.status, "value") else str(row.status)
+            status_dist[status_val] = {
+                "count": int(row.count),
+                "avg_iterations": round(float(row.avg_iterations), 1),
+                "avg_tokens": int(row.avg_tokens or 0),
+            }
+            total_sessions += int(row.count)
+
+        total_traces = int(trace_row.total_traces or 0)
+        error_count = int(trace_row.error_count or 0)
+        success_rate = ((total_traces - error_count) / max(total_traces, 1)) * 100
+
+        return {
+            "period_days": days,
+            "total_sessions": total_sessions,
+            "status_distribution": status_dist,
+            "total_tool_calls": total_traces,
+            "avg_tool_latency_ms": round(float(trace_row.avg_latency_ms or 0), 1),
+            "tool_error_count": error_count,
+            "tool_success_rate": round(success_rate, 1),
+        }
+    except Exception as e:
+        logger.error("analytics_performance_error", error=str(e))
+        return {"period_days": days, "total_sessions": 0, "status_distribution": {},
+                "total_tool_calls": 0, "avg_tool_latency_ms": 0, "tool_error_count": 0, "tool_success_rate": 0}
+
+
+# ---------------------------------------------------------------------------
+# Report Sharing (Feature Gap #5 / Task 17)
+# ---------------------------------------------------------------------------
+@router.post("/api/sessions/{session_id}/share")
+async def create_share_endpoint(
+    session_id: str,
+    is_public: bool = False,
+    expires_days: int = 30,
+    user: User = Depends(get_current_active_user),
+):
+    """Create a shareable link for a completed research report."""
+    try:
+        result = await create_share_link(
+            session_id=session_id,
+            user_id=str(user.id),
+            is_public=is_public,
+            expires_days=expires_days,
+        )
+        await audit_logger.log("share_link_created", user_id=str(user.id),
+                               details={"session_id": session_id, "is_public": is_public})
+        return result
+    except Exception as e:
+        logger.error("create_share_link_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/sessions/{session_id}/shares")
+async def list_shares_endpoint(
+    session_id: str,
+    user: User = Depends(get_current_active_user),
+):
+    """List all share links for a session."""
+    try:
+        return await list_share_links(session_id=session_id, user_id=str(user.id))
+    except Exception as e:
+        logger.error("list_share_links_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/shared/{token}")
+async def revoke_share_endpoint(
+    token: str,
+    user: User = Depends(get_current_active_user),
+):
+    """Revoke (delete) a share link."""
+    try:
+        result = await revoke_share_link(token=token, user_id=str(user.id))
+        await audit_logger.log("share_link_revoked", user_id=str(user.id),
+                               details={"token_prefix": token[:8]})
+        return result
+    except Exception as e:
+        logger.error("revoke_share_link_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/shared/{token}")
+async def view_shared_report(token: str):
+    """View a shared report (no auth required for public shares)."""
+    try:
+        report = await get_shared_report(token)
+        if not report:
+            raise HTTPException(status_code=404, detail="Share link not found or expired")
+        return report
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("view_shared_report_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# SOC2 Compliance Audit Endpoints (Feature Gap #12 / Task 18)
+# ---------------------------------------------------------------------------
+@router.get("/api/audit/summary")
+async def audit_summary_endpoint(
+    days: int = 30,
+    user: User = Depends(get_current_active_user),
+):
+    """Get aggregate audit statistics for the given period."""
+    try:
+        return await audit_logger.get_audit_summary(days=days)
+    except Exception as e:
+        logger.error("audit_summary_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/audit/export")
+async def audit_export_endpoint(
+    days: int = 30,
+    event_type: str | None = None,
+    format: str = "json",
+    user: User = Depends(get_current_active_user),
+):
+    """Export audit logs for compliance review (JSON or CSV)."""
+    try:
+        from datetime import timedelta
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=days)
+        result = await audit_logger.export_logs(
+            start_date=start_date,
+            end_date=end_date,
+            event_type=event_type,
+            format=format,
+        )
+        if format == "csv":
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(content=result, media_type="text/csv")
+        return result
+    except Exception as e:
+        logger.error("audit_export_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/audit/retention")
+async def audit_retention_endpoint(
+    user: User = Depends(get_current_active_user),
+):
+    """Apply audit log retention policy (delete logs older than AUDIT_RETENTION_DAYS)."""
+    try:
+        return await audit_logger.apply_retention_policy()
+    except Exception as e:
+        logger.error("audit_retention_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Tool Registry & MCP Hot-Reload (Feature Gap #10 / Task 19)
+# ---------------------------------------------------------------------------
+@router.get("/api/tools")
+async def list_tools_endpoint(
+    source: str | None = None,
+    category: str | None = None,
+    user: User = Depends(get_current_active_user),
+):
+    """List all registered tools with optional filtering."""
+    from backend.core.tool_registry import tool_registry
+    if source:
+        tools = tool_registry.get_tools_by_source(source)
+    elif category:
+        tools = tool_registry.get_tools_by_category(category)
+    else:
+        tools = tool_registry.get_enabled_tools()
+    return {
+        "total": len(tools),
+        "tools": [
+            {"id": t.tool_id, "name": t.name, "source": t.source,
+             "description": t.description, "categories": t.categories,
+             "enabled": t.is_enabled}
+            for t in tools
+        ],
+    }
+
+
+@router.get("/api/tools/status")
+async def tool_registry_status(
+    user: User = Depends(get_current_active_user),
+):
+    """Get tool registry status for observability."""
+    from backend.core.tool_registry import tool_registry
+    return tool_registry.get_status()
+
+
+@router.post("/api/mcp/reload")
+async def mcp_hot_reload_endpoint(
+    user: User = Depends(get_current_active_user),
+):
+    """Hot-reload MCP server configuration from disk."""
+    try:
+        from backend.mcp.server_registry import MCPServerRegistry
+        mcp_reg = MCPServerRegistry()
+        result = await mcp_reg.hot_reload_config()
+        await audit_logger.log_config_change(
+            user_id=str(user.id),
+            setting_name="mcp_servers_config",
+            old_value="previous",
+            new_value="reloaded",
+        )
+        return result
+    except Exception as e:
+        logger.error("mcp_hot_reload_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Real-Time Collaboration (Feature Gap #5 / Task 20)
+# ---------------------------------------------------------------------------
+@router.post("/api/sessions/{session_id}/collaborate/join")
+async def join_session_endpoint(
+    session_id: str,
+    role: str = "viewer",
+    user: User = Depends(get_current_active_user),
+):
+    """Join a research session as a collaborator."""
+    from backend.core.collaboration import collaboration_manager
+    try:
+        result = await collaboration_manager.join_session(
+            session_id=session_id, user_id=str(user.id), role=role,
+        )
+        await audit_logger.log("session_collaborate_join", user_id=str(user.id),
+                               details={"session_id": session_id, "role": role})
+        # Broadcast join event to existing participants
+        await collaboration_manager.broadcast_event(
+            session_id, "participant_joined",
+            {"user_id": str(user.id), "role": role},
+            exclude_user=str(user.id),
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("collaboration_join_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/sessions/{session_id}/collaborate/leave")
+async def leave_session_endpoint(
+    session_id: str,
+    user: User = Depends(get_current_active_user),
+):
+    """Leave a research session."""
+    from backend.core.collaboration import collaboration_manager
+    try:
+        result = await collaboration_manager.leave_session(
+            session_id=session_id, user_id=str(user.id),
+        )
+        await collaboration_manager.broadcast_event(
+            session_id, "participant_left",
+            {"user_id": str(user.id)},
+            exclude_user=str(user.id),
+        )
+        return result
+    except Exception as e:
+        logger.error("collaboration_leave_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/sessions/{session_id}/collaborate/participants")
+async def list_participants_endpoint(
+    session_id: str,
+    user: User = Depends(get_current_active_user),
+):
+    """List all participants in a research session."""
+    from backend.core.collaboration import collaboration_manager
+    try:
+        return await collaboration_manager.list_participants(session_id=session_id)
+    except Exception as e:
+        logger.error("collaboration_list_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/api/sessions/{session_id}/collaborate/role")
+async def update_role_endpoint(
+    session_id: str,
+    target_user_id: str,
+    new_role: str,
+    user: User = Depends(get_current_active_user),
+):
+    """Update a participant's role (requires owner/admin)."""
+    from backend.core.collaboration import collaboration_manager
+    try:
+        result = await collaboration_manager.update_role(
+            session_id=session_id, user_id=target_user_id, new_role=new_role,
+        )
+        await collaboration_manager.broadcast_event(
+            session_id, "role_updated",
+            {"user_id": target_user_id, "new_role": new_role},
+        )
+        return result
+    except Exception as e:
+        logger.error("collaboration_role_update_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/collaboration/active")
+async def active_collaborations_endpoint(
+    user: User = Depends(get_current_active_user),
+):
+    """Get sessions with active real-time connections."""
+    from backend.core.collaboration import collaboration_manager
+    return collaboration_manager.get_active_sessions()
+
+
+# ---------------------------------------------------------------------------
+# Agent Harness Configuration & Health (Task 21)
+# ---------------------------------------------------------------------------
+@router.get("/api/harness/config")
+async def harness_config_endpoint(
+    org_id: str | None = None,
+    user: User = Depends(get_current_active_user),
+):
+    """Get the full Agent Harness configuration."""
+    from backend.core.harness import agent_harness
+    return agent_harness.get_config(org_id=org_id)
+
+
+@router.get("/api/harness/health")
+async def harness_health_endpoint(
+    user: User = Depends(get_current_active_user),
+):
+    """Run a live health check across all Agent Harness pillars."""
+    from backend.core.harness import agent_harness
+    return await agent_harness.run_health_check()
+
+
+@router.get("/api/harness/score")
+async def harness_score_endpoint(
+    user: User = Depends(get_current_active_user),
+):
+    """Get detailed Agent Harness pillar scoring."""
+    from backend.core.harness import agent_harness
+    return agent_harness.get_total_harness_score()
+
+
 @router.websocket("/ws/{session_id}")
 async def websocket_research(websocket: WebSocket, session_id: str):
     user: User | None = None
     listener_task: asyncio.Task | None = None
+    heartbeat_task: asyncio.Task | None = None
     tenant_token = None
 
     try:
@@ -654,6 +1211,34 @@ async def websocket_research(websocket: WebSocket, session_id: str):
             return
 
         await websocket.accept()
+
+        # --- WebSocket Heartbeat (Arch Issue #8) ---
+        _last_pong: dict[str, float] = {"ts": asyncio.get_event_loop().time()}
+
+        async def _heartbeat():
+            """Send periodic pings; close if no pong within timeout."""
+            interval = _ws_settings.WS_HEARTBEAT_INTERVAL
+            timeout = _ws_settings.WS_HEARTBEAT_TIMEOUT
+            try:
+                while True:
+                    await asyncio.sleep(interval)
+                    try:
+                        await websocket.send_json({"type": "ping"})
+                    except Exception:
+                        break
+                    elapsed = asyncio.get_event_loop().time() - _last_pong["ts"]
+                    if elapsed > timeout:
+                        logger.warning("ws_heartbeat_timeout", session_id=session_id)
+                        try:
+                            await websocket.close(code=4408, reason="Heartbeat timeout")
+                        except Exception:
+                            pass
+                        break
+            except asyncio.CancelledError:
+                pass
+
+        heartbeat_task = asyncio.create_task(_heartbeat())
+
         await audit_logger.log("ws_connect", user_id=str(user.id), details={"session_id": session_id})
 
         existing_session = await session_store.get(session_id)
@@ -779,7 +1364,9 @@ async def websocket_research(websocket: WebSocket, session_id: str):
                 try:
                     msg = await websocket.receive_text()
                     client_payload = json.loads(msg)
-                    if client_payload.get("type") == "hitl_resume":
+                    if client_payload.get("type") == "pong":
+                        _last_pong["ts"] = asyncio.get_event_loop().time()
+                    elif client_payload.get("type") == "hitl_resume":
                         action = client_payload.get("data", {}).get("action", "continue")
                         modifications = client_payload.get("data", {}).get("modifications", {})
                         modifications["action"] = action
@@ -877,6 +1464,8 @@ async def websocket_research(websocket: WebSocket, session_id: str):
 
         if listener_task:
             listener_task.cancel()
+        if heartbeat_task:
+            heartbeat_task.cancel()
 
         metrics = get_execution_metrics(session_id)
         final_updates = {
@@ -921,6 +1510,8 @@ async def websocket_research(websocket: WebSocket, session_id: str):
     finally:
         if listener_task:
             listener_task.cancel()
+        if heartbeat_task:
+            heartbeat_task.cancel()
         if tenant_token is not None:
             reset_tenant_context(tenant_token)
         cleanup_session(session_id)

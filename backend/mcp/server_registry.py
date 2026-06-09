@@ -389,3 +389,99 @@ class MCPServerRegistry:
             if instance:
                 await self._shutdown_server(name, instance)
                 logger.info("mcp_server_removed", name=name)
+
+    async def hot_reload_config(self, config_path: str = None):
+        """Reload MCP server configuration from disk.
+
+        Compares the new config with the current state:
+        - New servers are added and started.
+        - Removed servers are shut down.
+        - Changed servers are restarted with new config.
+        - Unchanged servers are left alone.
+
+        Also triggers a refresh of the tool registry if available.
+        """
+        path = config_path or settings.MCP_SERVERS_CONFIG
+
+        if not os.path.exists(path):
+            logger.warning("mcp_hot_reload_config_not_found", path=path)
+            return {"status": "error", "message": "Config file not found"}
+
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+
+            new_configs: dict[str, dict] = data.get("servers", {})
+            old_names = set(self._servers.keys())
+            new_names = set(new_configs.keys())
+
+            added = new_names - old_names
+            removed = old_names - new_names
+            possibly_changed = old_names & new_names
+
+            # Determine which existing servers have config changes
+            changed = set()
+            for name in possibly_changed:
+                old_cfg = self._servers[name].config
+                new_cfg = new_configs[name]
+                if (
+                    old_cfg.command != new_cfg.get("command", "python")
+                    or old_cfg.args != new_cfg.get("args", [])
+                    or old_cfg.transport != new_cfg.get("transport", "stdio")
+                ):
+                    changed.add(name)
+
+            async with self._lock:
+                # Remove servers no longer in config
+                for name in removed:
+                    instance = self._servers.pop(name, None)
+                    if instance:
+                        await self._shutdown_server(name, instance)
+                    logger.info("mcp_hot_reload_removed", name=name)
+
+                # Restart changed servers
+                for name in changed:
+                    instance = self._servers.pop(name, None)
+                    if instance:
+                        await self._shutdown_server(name, instance)
+                    # Fall through to add with new config
+
+                # Add new + changed servers
+                for name in added | changed:
+                    cfg = new_configs[name]
+                    server_config = MCPServerConfig(
+                        name=name,
+                        command=cfg.get("command", "python"),
+                        args=cfg.get("args", []),
+                        env=cfg.get("env", {}),
+                        transport=cfg.get("transport", "stdio"),
+                        url=cfg.get("url", ""),
+                        enabled=cfg.get("enabled", True),
+                        auto_start=cfg.get("auto_start", True),
+                        health_check_interval=cfg.get("health_check_interval", 60),
+                    )
+                    self._servers[name] = MCPServerInstance(config=server_config)
+                    if server_config.enabled and server_config.auto_start:
+                        await self._start_server(name)
+
+            # Refresh tool registry
+            try:
+                from backend.core.tool_registry import tool_registry
+                refresh_result = await tool_registry.refresh_mcp_tools(self)
+                logger.info("mcp_hot_reload_tools_refreshed", **refresh_result)
+            except ImportError:
+                pass
+
+            result = {
+                "status": "ok",
+                "added": list(added),
+                "removed": list(removed),
+                "changed": list(changed),
+                "unchanged": list(possibly_changed - changed),
+            }
+            logger.info("mcp_hot_reload_complete", **result)
+            return result
+
+        except Exception as e:
+            logger.error("mcp_hot_reload_error", error=str(e))
+            return {"status": "error", "message": str(e)}

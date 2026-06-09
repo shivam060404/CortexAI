@@ -25,6 +25,19 @@ from backend.auth.api_keys import generate_api_key_pair
 from backend.api.schemas import RegisterRequest, LoginRequest, OAuthCallbackRequest, UserResponse
 from backend.core.audit import audit_logger
 from backend.core.logger import get_logger
+from backend.auth.organization import (
+    create_organization,
+    get_user_organizations,
+    add_member,
+    list_members,
+)
+from backend.auth.api_key_manager import (
+    create_api_key,
+    list_api_keys,
+    revoke_api_key,
+    delete_api_key,
+    rotate_api_key,
+)
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -181,3 +194,113 @@ async def github_callback(req: OAuthCallbackRequest):
     except Exception as e:
         logger.error("github_oauth_error", error=str(e))
         raise HTTPException(status_code=400, detail=f"GitHub OAuth failed: {str(e)}")
+
+
+# ─── Organization Endpoints (Feature Gap #1) ───
+
+
+@router.post("/organizations")
+async def create_org(req: dict, current_user: User = Depends(get_current_active_user)):
+    """Create a new organization."""
+    name = req.get("name", "").strip()
+    plan_type = req.get("plan_type", "free")
+    if not name:
+        raise HTTPException(status_code=400, detail="Organization name is required")
+    try:
+        org = await create_organization(name, str(current_user.id), plan_type=plan_type)
+        await audit_logger.log("org_create", user_id=str(current_user.id), details={"org_id": org["id"]})
+        return {"organization": org}
+    except Exception as e:
+        logger.error("create_org_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/organizations")
+async def list_orgs(current_user: User = Depends(get_current_active_user)):
+    """List all organizations the current user belongs to."""
+    orgs = await get_user_organizations(str(current_user.id))
+    return {"organizations": orgs}
+
+
+@router.get("/organizations/{org_id}/members")
+async def get_org_members(org_id: str, current_user: User = Depends(get_current_active_user)):
+    """List members of an organization."""
+    try:
+        members = await list_members(org_id)
+        return {"members": members}
+    except Exception as e:
+        logger.error("get_org_members_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/organizations/{org_id}/members")
+async def add_org_member(org_id: str, req: dict, current_user: User = Depends(get_current_active_user)):
+    """Add a member to an organization."""
+    user_id = req.get("user_id", "").strip()
+    role = req.get("role", "member")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        result = await add_member(org_id, user_id, role=role, invited_by=str(current_user.id))
+        await audit_logger.log("org_member_add", user_id=str(current_user.id),
+                               details={"org_id": org_id, "member_id": user_id, "role": role})
+        return {"member": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("add_org_member_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── API Key Management Endpoints (Feature Gap #2) ───
+
+
+@router.post("/api-keys")
+async def create_key(req: dict, current_user: User = Depends(get_current_active_user)):
+    """Create a new API key with optional scopes and rate limits."""
+    name = req.get("name", "default")
+    scopes = req.get("scopes")
+    rate_limit = req.get("rate_limit", 60)
+    expires_days = req.get("expires_days", 90)
+    result = await create_api_key(
+        str(current_user.id), name=name, scopes=scopes,
+        rate_limit=rate_limit, expires_days=expires_days,
+    )
+    await audit_logger.log("api_key_create", user_id=str(current_user.id),
+                           details={"key_id": result["id"], "name": name})
+    return {"api_key": result}
+
+
+@router.get("/api-keys")
+async def get_api_keys(current_user: User = Depends(get_current_active_user)):
+    """List all API keys for the current user."""
+    keys = await list_api_keys(str(current_user.id))
+    return {"api_keys": keys}
+
+
+@router.delete("/api-keys/{key_id}")
+async def remove_api_key(key_id: str, current_user: User = Depends(get_current_active_user)):
+    """Delete an API key."""
+    result = await delete_api_key(str(current_user.id), key_id)
+    await audit_logger.log("api_key_delete", user_id=str(current_user.id), details={"key_id": key_id})
+    return result
+
+
+@router.post("/api-keys/{key_id}/revoke")
+async def revoke_key(key_id: str, current_user: User = Depends(get_current_active_user)):
+    """Revoke (deactivate) an API key."""
+    result = await revoke_api_key(str(current_user.id), key_id)
+    await audit_logger.log("api_key_revoke", user_id=str(current_user.id), details={"key_id": key_id})
+    return result
+
+
+@router.post("/api-keys/{key_id}/rotate")
+async def rotate_key(key_id: str, current_user: User = Depends(get_current_active_user)):
+    """Rotate an API key: creates a new key and schedules old key expiry."""
+    try:
+        result = await rotate_api_key(str(current_user.id), key_id)
+        await audit_logger.log("api_key_rotate", user_id=str(current_user.id),
+                               details={"old_key_id": key_id, "new_key_id": result["new_key"]["id"]})
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

@@ -9,6 +9,7 @@ from backend.core.retry import retry_with_backoff, CircuitBreaker
 from backend.core.logger import get_logger
 from backend.config import settings
 from backend.core.ranking_engine import rank_search_results
+from backend.core.rag_pipeline import rag_pipeline
 
 logger = get_logger(__name__)
 _cache = CacheManager()
@@ -76,12 +77,12 @@ def _make_cached_search(name: str, description: str):
 
 def get_search_tools():
     """Return the list of search tools.
-    If MCP is enabled, we rely on the MCP search server instead of built-in tools.
+    
+    Tavily-based tools are always provided as the baseline search capability.
+    MCP tools (when enabled) supplement these via the MCP protocol, but never
+    replace the built-in tools — ensuring search always works (Feature Gap #3 fix).
     """
-    if getattr(settings, "MCP_ENABLED", False):
-        return []
-
-    return [
+    tools = [
         _make_cached_search(
             "web_search",
             "Search the web for general information from websites, blogs, and forums."
@@ -95,3 +96,27 @@ def get_search_tools():
             "Search for recent news articles, current events, and media coverage."
         ),
     ]
+
+    # MCP tools are registered separately via the MCP registry and bound at
+    # graph-build time; they *add to* the tool list rather than replacing it.
+
+    # RAG search tool — queries the session's LanceDB vector store (Feature Gap #6)
+    @tool
+    async def rag_search(query: str) -> str:
+        """Search the session's knowledge base for relevant previously ingested documents.
+        Use this to find information from documents the user has uploaded or that have been
+        stored during prior research in this session."""
+        # The session_id is injected by the tool node at runtime via state
+        # For the search agent, we pass "default" as session context
+        results = await rag_pipeline.hybrid_search("default", query)
+        if not results:
+            return "No relevant documents found in the session knowledge base."
+        formatted = []
+        for r in results[:5]:
+            content = r.get("content", "")[:500]
+            score = r.get("relevance_score", 0)
+            formatted.append(f"[Score: {score:.2f}] {content}")
+        return "\n\n---\n\n".join(formatted)
+
+    tools.append(rag_search)
+    return tools

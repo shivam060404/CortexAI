@@ -6,6 +6,7 @@ Provides mechanisms to pause agent execution, request user review, and resume wi
 import asyncio
 from typing import Optional
 
+from backend.config import settings
 from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,28 +23,48 @@ class HITLManager:
     """Manages the pause/resume lifecycle for Human-in-the-Loop interventions."""
 
     @staticmethod
-    async def pause_for_review(session_id: str, checkpoint_type: str, data: dict, timeout_seconds: int = 300) -> dict | None:
+    async def pause_for_review(
+        session_id: str,
+        checkpoint_type: str,
+        data: dict,
+        timeout_seconds: int | None = None,
+    ) -> dict | None:
         """
         Pause the current task and wait for user intervention.
         This blocks the current coroutine until resumed by the user or timeout occurs.
+
+        Args:
+            session_id: The research session identifier.
+            checkpoint_type: Type of checkpoint (e.g. 'tool_approval', 'plan_review').
+            data: Contextual data to present to the reviewer.
+            timeout_seconds: Override timeout; clamped to HITL_MAX_TIMEOUT_SECONDS to prevent DoS.
         """
+        # Enforce configurable timeout with DoS cap (Security #6)
+        effective_timeout = timeout_seconds or settings.HITL_TIMEOUT_SECONDS
+        effective_timeout = min(effective_timeout, settings.HITL_MAX_TIMEOUT_SECONDS)
+
         event = asyncio.Event()
         _active_pauses[session_id] = event
         _injected_modifications[session_id] = {}
 
-        logger.info("hitl_paused", session_id=session_id, checkpoint_type=checkpoint_type)
+        logger.info(
+            "hitl_paused",
+            session_id=session_id,
+            checkpoint_type=checkpoint_type,
+            timeout=effective_timeout,
+        )
 
         try:
             # Wait for resume or timeout
-            await asyncio.wait_for(event.wait(), timeout=timeout_seconds)
-            
+            await asyncio.wait_for(event.wait(), timeout=effective_timeout)
+
             # Fetch modifications provided during resume
             mods = _injected_modifications.pop(session_id, {})
             logger.info("hitl_resumed", session_id=session_id, modifications_keys=list(mods.keys()))
             return mods
 
         except asyncio.TimeoutError:
-            logger.warning("hitl_timeout", session_id=session_id, timeout=timeout_seconds)
+            logger.warning("hitl_timeout", session_id=session_id, timeout=effective_timeout)
             return None
         finally:
             _active_pauses.pop(session_id, None)

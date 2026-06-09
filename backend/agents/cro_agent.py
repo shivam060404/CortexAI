@@ -30,13 +30,29 @@ Otherwise, output the exact name of the worker to delegate to: "SearchAgent" or 
 Do not output anything else except "Planner", "SearchAgent", "VerificationAgent", or "FINISH".
 """
 
-def get_cro_supervisor_agent():
-    """Returns the LLM bound with the CRO routing logic."""
-    
+
+def get_cro_supervisor_agent(phase: str = "routing"):
+    """Returns the LLM bound with the CRO routing logic.
+
+    Args:
+        phase: The supervisor phase context to select the appropriate temperature.
+            - 'routing': deterministic routing decisions (lowest temp)
+            - 'planning': research plan generation (moderate temp)
+            - 'creative': synthesis and creative tasks (highest temp)
+
+    Uses dynamic temperature from settings (Arch Issue #2).
+    """
+    temp_map = {
+        "routing": settings.SUPERVISOR_ROUTING_TEMP,
+        "planning": settings.SUPERVISOR_PLANNING_TEMP,
+        "creative": settings.SUPERVISOR_CREATIVE_TEMP,
+    }
+    temperature = temp_map.get(phase, settings.SUPERVISOR_ROUTING_TEMP)
+
     llm = ChatLiteLLM(
         model=settings.ORCHESTRATOR_MODEL,
-        temperature=0.1,  # Low temperature for deterministic routing
+        temperature=temperature,
     )
-    
-    # We will use this in the LangGraph supervisor node
+
+    logger.debug("cro_agent_created", phase=phase, temperature=temperature)
     return llm

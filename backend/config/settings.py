@@ -3,7 +3,7 @@ CortexAI Settings — centralized configuration with Pydantic BaseSettings.
 All values are overridable via environment variables or .env file.
 """
 
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 
@@ -139,6 +139,56 @@ class Settings(BaseSettings):
     GUARD_ENABLE_INJECTION_SHIELD: bool = True
     GUARD_ENABLE_OUTPUT_MODERATION: bool = True
     GUARD_SCOPE_DRIFT_THRESHOLD: int = 5 # Check every 5 iterations
+
+    # --- WebSocket Heartbeat (Arch Issue #8) ---
+    WS_HEARTBEAT_INTERVAL: int = 30        # seconds between pings
+    WS_HEARTBEAT_TIMEOUT: int = 90         # close after this many seconds of no pong
+
+    # --- Request Body Limit (Security #4) ---
+    MAX_REQUEST_BODY_SIZE: int = 10 * 1024 * 1024  # 10 MB
+
+    # --- HITL Configurable Timeout (Security #6) ---
+    HITL_TIMEOUT_SECONDS: int = 300
+    HITL_MAX_TIMEOUT_SECONDS: int = 600    # DoS prevention cap
+
+    # --- Graph Cache (Arch Issue #4) ---
+    GRAPH_CACHE_MAX_SIZE: int = 50
+    GRAPH_CACHE_TTL_SECONDS: int = 3600    # 1 hour
+
+    # --- Dynamic Supervisor Temperature (Arch Issue #2) ---
+    SUPERVISOR_ROUTING_TEMP: float = 0.1
+    SUPERVISOR_PLANNING_TEMP: float = 0.3
+    SUPERVISOR_CREATIVE_TEMP: float = 0.4
+
+    # --- Multi-Model Fallback (Arch Issue #7) ---
+    FALLBACK_MODELS: List[str] = Field(default_factory=lambda: [
+        "groq/llama3-70b-8192",
+    ])
+
+    # --- Sandbox (Arch Issue #3) ---
+    SANDBOX_MEMORY_LIMIT_MB: int = 256
+    SANDBOX_TIMEOUT: int = 30              # seconds
+    TOOL_EXECUTION_TIMEOUT: int = 60       # seconds
+    TOOL_MAX_OUTPUT_SIZE: int = 100_000    # chars
+
+    # --- Graph Backend (Arch Issue #1) ---
+    GRAPH_BACKEND: str = "memory"          # memory | redis
+
+    # --- Trust Engine (Arch Issue #6) ---
+    TRUST_ENGINE_MODE: str = "heuristic"   # heuristic | ml
+
+    # --- Supervisor Loop Detection (Pillar 5) ---
+    SUPERVISOR_LOOP_THRESHOLD: int = 3
+
+    # --- Content Policy (Pillar 4) ---
+    CONTENT_POLICY_MODE: str = "auto"      # auto | supervised | locked
+
+    # --- SOC2 Compliance (Feature Gap #12) ---
+    AUDIT_RETENTION_DAYS: int = 365
+    SOC2_MODE: bool = False
+
+    # --- Organization (Feature Gap #1) ---
+    ORGANIZATION_ENABLED: bool = True
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

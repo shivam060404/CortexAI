@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 from langchain_core.messages import AIMessage, SystemMessage
@@ -26,7 +27,10 @@ from backend.agents.cro_agent import CRO_SYSTEM_PROMPT, get_cro_supervisor_agent
 from backend.agents.search_agent import create_search_agent
 from backend.agents.verification_agent import create_verification_agent
 from backend.config import settings
+from backend.core.guardrails import verify_citations
+from backend.core.model_router import model_router
 from backend.core.context_graph import ContextGraph
+from backend.core.graph_backends import create_backend
 from backend.core.execution_guard import ExecutionGuard
 from backend.core.failure_memory import clear_failures
 from backend.core.logger import get_logger
@@ -64,8 +68,9 @@ _session_tool_guards: dict[str, ToolPermissionGuard] = {}
 _session_context_managers: dict[str, ContextManager] = {}
 _session_last_accessed: dict[str, float] = {}
 _session_metric_snapshots: dict[str, dict] = {}
-_compiled_graphs: dict[str, Any] = {}
+_compiled_graphs: OrderedDict[str, Any] = OrderedDict()
 _checkpointer = None
+_routing_history: dict[str, list[str]] = {}  # session_id -> list of routing decisions
 
 
 class _FallbackLLM:
@@ -83,7 +88,8 @@ class _FallbackLLM:
 
 def get_context_graph(session_id: str) -> ContextGraph:
     if session_id not in _session_graphs:
-        _session_graphs[session_id] = ContextGraph(session_id)
+        backend = create_backend(settings.GRAPH_BACKEND, session_id=session_id)
+        _session_graphs[session_id] = ContextGraph(session_id, backend=backend)
     return _session_graphs[session_id]
 
 
@@ -376,7 +382,14 @@ async def build_graph(session_id: str):
     _get_context_manager(session_id)
 
     if session_id in _compiled_graphs:
+        # Move to end (most-recently used) for LRU eviction
+        _compiled_graphs.move_to_end(session_id)
         return _compiled_graphs[session_id]
+
+    # --- Graph Cache LRU Eviction (Arch Issue #4) ---
+    while len(_compiled_graphs) >= settings.GRAPH_CACHE_MAX_SIZE:
+        evicted_id, _ = _compiled_graphs.popitem(last=False)  # Remove oldest
+        logger.info("graph_cache_evicted", evicted_session=evicted_id)
 
     try:
         cro_llm = get_cro_supervisor_agent()
@@ -478,7 +491,8 @@ async def build_graph(session_id: str):
             )
         ] + state["messages"]
         try:
-            response = await cro_llm.ainvoke(messages)
+            # Use ModelRouter for automatic fallback on model errors (Arch Issue #7)
+            response = await model_router.ainvoke_with_fallback(messages, task_type="routing")
             decision = _extract_message_text(getattr(response, "content", ""))
         except Exception as exc:
             logger.warning("supervisor_routing_fallback", session_id=state["session_id"], error=str(exc))
@@ -489,6 +503,24 @@ async def build_graph(session_id: str):
             next_node = "Compiling"
         if next_node == "Planner":
             next_node = "Replanning"
+
+        # --- Supervisor Loop Detection (Pillar 5) ---
+        sid = state["session_id"]
+        history = _routing_history.setdefault(sid, [])
+        history.append(next_node)
+        loop_threshold = settings.SUPERVISOR_LOOP_THRESHOLD
+        if len(history) >= loop_threshold:
+            recent = history[-loop_threshold:]
+            if len(set(recent)) == 1 and recent[0] not in {"Compiling", "Replanning"}:
+                logger.warning(
+                    "supervisor_loop_detected",
+                    session_id=sid,
+                    repeated_decision=recent[0],
+                    count=len(recent),
+                )
+                next_node = "Compiling"  # Force finish to prevent infinite loops
+                _routing_history.pop(sid, None)
+
         return {
             "next": next_node,
             "supervisor_phase": SUPERVISOR_PHASE_DISPATCHING,
@@ -502,6 +534,9 @@ async def build_graph(session_id: str):
 
     async def search_node(state: AgentState):
         _touch_session(state["session_id"])
+        # --- Context Compaction (Arch Issue #5) ---
+        ctx_mgr = _get_context_manager(state["session_id"])
+        compacted_messages = await ctx_mgr.summarize_and_compact(state["messages"])
         messages = [
             SystemMessage(
                 content=(
@@ -510,7 +545,7 @@ async def build_graph(session_id: str):
                     f"Plan version: {state.get('plan_version', 0)}"
                 )
             )
-        ] + state["messages"]
+        ] + compacted_messages
         response = await search_llm.ainvoke(messages)
         return {
             "messages": [response],
@@ -529,6 +564,9 @@ async def build_graph(session_id: str):
 
     async def verification_node(state: AgentState):
         _touch_session(state["session_id"])
+        # --- Context Compaction (Arch Issue #5) ---
+        ctx_mgr = _get_context_manager(state["session_id"])
+        compacted_messages = await ctx_mgr.summarize_and_compact(state["messages"])
         messages = [
             SystemMessage(
                 content=(
@@ -537,7 +575,7 @@ async def build_graph(session_id: str):
                     f"Plan version: {state.get('plan_version', 0)}"
                 )
             )
-        ] + state["messages"]
+        ] + compacted_messages
         response = await verif_llm.ainvoke(messages)
         return {
             "messages": [response],
@@ -606,11 +644,53 @@ async def build_graph(session_id: str):
     async def compiling_node(state: AgentState):
         _touch_session(state["session_id"])
         completed_plan = await _complete_persisted_plan(state["session_id"], await load_latest_plan(state["session_id"]))
+
+        # --- Citation Verification Integration (Feature Gap #7) ---
+        accessed_urls = state.get("accessed_urls", set())
+        citation_warnings: list[str] = []
+        try:
+            from backend.db.workspace import WorkspaceManager as _WM
+            _wm = _WM()
+            report_md = _wm.read_file(state["session_id"], "report.md")
+            verified_report, fabricated = verify_citations(report_md, accessed_urls)
+            if fabricated:
+                citation_warnings = fabricated
+                _wm.write_file(state["session_id"], "report.md", verified_report)
+                logger.warning(
+                    "compiling_fabricated_citations",
+                    session_id=state["session_id"],
+                    count=len(fabricated),
+                )
+            report_md = verified_report
+        except Exception:
+            report_md = ""  # report.md may not exist yet
+
+        # --- Streaming Report Generation (Feature Gap #11) ---
+        # Emit report sections as streaming events for real-time display
+        streaming_events = []
+        if report_md:
+            sections = report_md.split("\n## ")
+            for i, section in enumerate(sections):
+                if section.strip():
+                    streaming_events.append({
+                        "type": "report_stream",
+                        "data": {
+                            "section_index": i,
+                            "section_count": len(sections),
+                            "content": section.strip()[:2000],
+                        },
+                    })
+
         final_output = (
             f"Workflow completed for session {state['session_id']}. "
             f"Analysis: {state.get('analysis_summary', '')[:200]} "
             f"Confidence: {float(state.get('evidence_confidence', 0.0) or 0.0):.2f}"
-        ).strip()
+        )
+        if citation_warnings:
+            final_output += (
+                f" WARNING: {len(citation_warnings)} fabricated citations detected and flagged."
+            )
+        final_output = final_output.strip()
         return {
             "messages": [AIMessage(content=final_output)],
             "status": "completed",
@@ -622,6 +702,7 @@ async def build_graph(session_id: str):
                 SUPERVISOR_PHASE_COMPILING,
                 "supervisor.report.finalized",
                 status="completed",
+                streaming_sections=len(streaming_events),
             ),
             **_plan_state_updates(completed_plan),
         }
@@ -751,6 +832,7 @@ def cleanup_session(session_id: str):
     _session_graphs.pop(session_id, None)
     _compiled_graphs.pop(session_id, None)
     _session_last_accessed.pop(session_id, None)
+    _routing_history.pop(session_id, None)
     clear_failures(session_id)
 
 

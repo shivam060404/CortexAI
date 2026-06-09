@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
 from backend.core.logger import get_logger
 from backend.auth.routes import router as auth_router
-from backend.api.middleware import AuthMiddleware, SecurityHeadersMiddleware, RateLimitMiddleware, AuditMiddleware
+from backend.api.middleware import AuthMiddleware, SecurityHeadersMiddleware, RateLimitMiddleware, AuditMiddleware, RequestBodyLimitMiddleware
 
 logger = get_logger(__name__)
 
@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
 
     # Security & rate limiting middleware (order matters: last added = first executed)
     app.add_middleware(AuditMiddleware)
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuthMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)

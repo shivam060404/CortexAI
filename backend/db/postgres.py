@@ -392,6 +392,51 @@ class AuditLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+class APIKey(Base):
+    """Multi-key API key management (Feature Gap #2).
+
+    Supports multiple keys per user with scopes, rate limits,
+    rotation grace periods, and last-used tracking.
+    """
+    __tablename__ = "api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False, default="default")
+    key_hash = Column(String(128), nullable=False, unique=True, index=True)
+    scopes = Column(JSON, default=list)  # e.g. ["research:read", "research:write"]
+    rate_limit = Column(Integer, default=60)  # requests per minute
+    is_active = Column(Boolean, default=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ReportShare(Base):
+    """Shareable report permalinks (Feature Gap #5)."""
+    __tablename__ = "report_shares"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("research_sessions.id", ondelete="CASCADE"), nullable=False)
+    share_token = Column(String(64), unique=True, nullable=False, index=True)
+    is_public = Column(Boolean, default=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    view_count = Column(Integer, default=0)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SessionParticipant(Base):
+    """Real-time collaboration: multiple users per research session (Feature Gap #5)."""
+    __tablename__ = "session_participants"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("research_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(32), default="viewer")  # owner, editor, viewer
+    joined_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 # ---------------------------------------------------------------------------
 # DB init helper
 # ---------------------------------------------------------------------------
