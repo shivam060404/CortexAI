@@ -6,6 +6,7 @@ import ReportViewer from '../../components/ReportViewer/ReportViewer';
 import ImageDropzone from '../../components/ImageDropzone/ImageDropzone';
 import LivePlanEditor from '../../components/LivePlanEditor/LivePlanEditor';
 import TaggingSystem from '../../components/TaggingSystem/TaggingSystem';
+import DocumentUploader from '../../components/DocumentUploader/DocumentUploader';
 import './Research.css';
 
 // Parse sources from tool results
@@ -89,6 +90,7 @@ export default function Research() {
   const [queryTags, setQueryTags] = useState([]);
   const [queryImage, setQueryImage] = useState(null);
   const [queryImageName, setQueryImageName] = useState('');
+  const [attachedFiles, setAttachedFiles] = useState([]);
 
   const timerRef = useRef(null);
   const eventsEndRef = useRef(null);
@@ -161,12 +163,18 @@ export default function Research() {
       const ws = new ResearchWebSocket(session.id, {
         onOpen: () => {
           setStatus('running');
-          // Include tags and image if present
+          // Include tags, image, and attached files
           ws.send(JSON.stringify({ 
             query: finalQuery, 
             mode: mode,
             tags: queryTags,
-            image_data: queryImage 
+            image_data: queryImage,
+            attached_files: attachedFiles.map(f => ({
+              filename: f.filename,
+              text: f.text,
+              image_data: f.image_data,
+              file_type: f.file_type,
+            })),
           }));
         },
         onEvent: (event) => {
@@ -252,6 +260,11 @@ export default function Research() {
               setQueryImage(data);
               setQueryImageName(name);
             }} />
+            <DocumentUploader
+              onFilesReady={(results) => setAttachedFiles(prev => [...prev, ...results])}
+              sessionId={sessionId || 'default'}
+              maxFiles={5}
+            />
             {queryImage && (
               <div className="image-preview">
                 <span className="image-name">📎 {queryImageName}</span>

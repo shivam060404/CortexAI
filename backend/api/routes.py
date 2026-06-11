@@ -11,7 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from langchain_core.messages import HumanMessage
 from sqlalchemy import func, or_, select, update as sa_update, Integer
 
@@ -1345,6 +1345,139 @@ async def suggest_research_plans(
     }
 
 
+# ─── Document Upload & Multi-Modal Ingestion Endpoints ───
+
+
+@router.post("/api/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    session_id: str = Form(default="default"),
+    user: User = Depends(get_current_active_user),
+):
+    """Upload a document for RAG ingestion.
+
+    Supported formats: PDF, DOCX, MD, TXT, CSV, PNG, JPG, WEBP.
+    Text documents are parsed and chunked into the vector store.
+    Images are stored as base64 for the vision agent to analyze during research.
+    """
+    from backend.core.document_parser import document_parser
+    from backend.core.rag_pipeline import rag_pipeline
+
+    # Read file bytes
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file uploaded")
+
+    filename = file.filename or "unknown"
+    content_type = file.content_type or ""
+
+    # Parse the document
+    doc = await document_parser.parse(filename, content, content_type)
+
+    if not doc.is_valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to parse {filename}: {doc.parse_error}",
+        )
+
+    # Ingest text documents into RAG pipeline
+    chunks_stored = 0
+    if doc.text and doc.file_type != "image":
+        chunks_stored = await rag_pipeline.ingest_document(
+            session_id=session_id,
+            text=doc.text,
+            metadata={
+                "filename": doc.filename,
+                "file_type": doc.file_type,
+                "word_count": doc.word_count,
+                **doc.metadata,
+            },
+            source=f"upload:{filename}",
+        )
+
+    # For images: return base64 data for the frontend to pass via WebSocket
+    image_data = ""
+    if doc.file_type == "image":
+        image_data = doc.base64_data
+
+    await audit_logger.log(
+        "document_upload",
+        user_id=str(user.id),
+        details={
+            "filename": filename,
+            "file_type": doc.file_type,
+            "word_count": doc.word_count,
+            "chunks_stored": chunks_stored,
+            "session_id": session_id,
+        },
+    )
+
+    return {
+        "filename": doc.filename,
+        "file_type": doc.file_type,
+        "word_count": doc.word_count,
+        "chunks_stored": chunks_stored,
+        "pages": len(doc.pages),
+        "image_data": image_data,
+        "preview": doc.text[:500] if doc.text else "",
+    }
+
+
+@router.post("/api/upload/batch")
+async def upload_documents_batch(
+    files: list[UploadFile] = File(...),
+    session_id: str = Form(default="default"),
+    user: User = Depends(get_current_active_user),
+):
+    """Upload multiple documents at once for RAG ingestion."""
+    from backend.core.document_parser import document_parser
+    from backend.core.rag_pipeline import rag_pipeline
+
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 files per batch upload")
+
+    results = []
+    total_chunks = 0
+
+    for file in files:
+        content = await file.read()
+        if not content:
+            results.append({"filename": file.filename, "error": "Empty file"})
+            continue
+
+        doc = await document_parser.parse(file.filename or "unknown", content, file.content_type or "")
+
+        if not doc.is_valid:
+            results.append({"filename": file.filename, "error": doc.parse_error})
+            continue
+
+        chunks = 0
+        if doc.text and doc.file_type != "image":
+            chunks = await rag_pipeline.ingest_document(
+                session_id=session_id,
+                text=doc.text,
+                metadata={"filename": doc.filename, "file_type": doc.file_type, **doc.metadata},
+                source=f"upload:{file.filename}",
+            )
+            total_chunks += chunks
+
+        results.append({
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "word_count": doc.word_count,
+            "chunks_stored": chunks,
+            "image_data": doc.base64_data if doc.file_type == "image" else "",
+        })
+
+    await audit_logger.log(
+        "document_upload_batch",
+        user_id=str(user.id),
+        details={"file_count": len(files), "total_chunks": total_chunks, "session_id": session_id},
+    )
+
+    return {"results": results, "total_chunks_stored": total_chunks, "file_count": len(results)}
+
+
 # ─── Collected Pages Endpoints (Phase 3 — Web Compare) ───
 
 # In-memory store for collected pages (per-user, backed by Redis in production)
@@ -1483,8 +1616,10 @@ async def websocket_research(websocket: WebSocket, session_id: str):
             return
         query = payload.get("query", data)
         research_mode = payload.get("mode", "deep")
-        if not str(query).strip():
-            await websocket.send_json({"type": "error", "data": {"message": "Query is required"}})
+        image_data = payload.get("image_data", "")
+        attached_files = payload.get("attached_files", [])
+        if not str(query).strip() and not image_data and not attached_files:
+            await websocket.send_json({"type": "error", "data": {"message": "Query, image, or file attachment is required"}})
             await websocket.close(code=4400)
             return
 
@@ -1532,6 +1667,52 @@ async def websocket_research(websocket: WebSocket, session_id: str):
         await websocket.send_json({"type": "status", "data": {"status": "running", "message": "Research started"}})
         await websocket.send_json({"type": "thinking", "data": {"message": "Aligning query with user preferences..."}})
 
+        # --- Multi-modal image analysis (Phase 3/4) ---
+        vision_context = ""
+        if image_data:
+            await websocket.send_json({"type": "thinking", "data": {"message": "Analyzing attached image with vision model..."}})
+            try:
+                from backend.tools.vision_tools import analyze_image
+                vision_prompt = query if str(query).strip() else "Describe this image in detail, including any text, data, charts, or key observations."
+                vision_result = analyze_image.invoke({"base64_image": image_data, "prompt": vision_prompt})
+                vision_context = f"\n\n[VISION ANALYSIS OF ATTACHED IMAGE]\n{vision_result}\n"
+                logger.info("ws_image_analyzed", session_id=session_id, result_len=len(str(vision_result)))
+            except Exception as e:
+                logger.warning("ws_image_analysis_failed", error=str(e))
+                vision_context = "\n\n[VISION ANALYSIS FAILED — image was attached but could not be analyzed]"
+
+        # --- Document attachment context ---
+        attachment_context = ""
+        if attached_files:
+            from backend.core.document_parser import document_parser
+            from backend.core.rag_pipeline import rag_pipeline
+            file_summaries = []
+            for att in attached_files:
+                att_name = att.get("filename", "unknown")
+                att_text = att.get("text", "")
+                att_image = att.get("image_data", "")
+                if att_text:
+                    # Ingest text content into RAG
+                    await rag_pipeline.ingest_document(
+                        session_id=session_id, text=att_text,
+                        metadata={"filename": att_name, "source": "websocket_attachment"},
+                        source=f"ws_attach:{att_name}",
+                    )
+                    file_summaries.append(f"- {att_name}: {len(att_text.split())} words ingested")
+                elif att_image:
+                    # Analyze with vision model
+                    try:
+                        from backend.tools.vision_tools import analyze_image
+                        vresult = analyze_image.invoke({
+                            "base64_image": att_image,
+                            "prompt": f"Analyze this attached file ({att_name}). Extract all text, data, and key observations.",
+                        })
+                        file_summaries.append(f"- {att_name}: Vision analysis — {str(vresult)[:300]}")
+                    except Exception as ve:
+                        file_summaries.append(f"- {att_name}: Could not analyze ({ve})")
+            if file_summaries:
+                attachment_context = f"\n\n[ATTACHED DOCUMENTS]\n{chr(10).join(file_summaries)}\n"
+
         user_prefs = await get_user_preferences(str(user.id))
         alignment = await align_query(query, mode=research_mode, user_prefs=user_prefs)
         aligned_query = alignment["refined_query"]
@@ -1548,7 +1729,7 @@ async def websocket_research(websocket: WebSocket, session_id: str):
             }
         )
 
-        enriched_query = f"""{aligned_query}
+        enriched_query = f"""{aligned_query}{vision_context}{attachment_context}
 
 [ALIGNMENT CONTEXT]
 - Research Mode: {mode_config.get('label', 'Deep')} ({mode_config.get('depth', 'comprehensive')})

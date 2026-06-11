@@ -50,6 +50,8 @@ pydantic-ai
 apscheduler
 python-pptx
 python-docx
+PyPDF2>=3.0.0           # PDF text extraction for document upload
+python-multipart>=0.0.6  # FastAPI multipart/form-data support
 weasyprint
 matplotlib
 pandas

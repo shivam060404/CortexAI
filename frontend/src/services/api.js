@@ -216,3 +216,33 @@ export async function submitFeedback(sessionId, rating, comment = '', mode = 'de
 export async function getPreferences() {
   return apiFetch('/api/preferences');
 }
+
+// --- Document Upload ---
+
+export async function uploadDocument(file, sessionId = 'default') {
+  const token = getToken();
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('session_id', sessionId);
+
+  const response = await fetch(`${API_BASE}/api/upload`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  return parseResponse(response);
+}
+
+export async function uploadDocumentsBatch(files, sessionId = 'default') {
+  const token = getToken();
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+  formData.append('session_id', sessionId);
+
+  const response = await fetch(`${API_BASE}/api/upload/batch`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  return parseResponse(response);
+}
