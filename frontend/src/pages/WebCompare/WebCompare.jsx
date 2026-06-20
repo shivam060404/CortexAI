@@ -18,10 +18,6 @@ export default function WebCompare() {
   const [newTag, setNewTag] = useState('');
 
   // Fetch collected pages from backend
-  useEffect(() => {
-    fetchPages();
-  }, []);
-
   async function fetchPages() {
     try {
       const res = await fetch('/api/context/collected-pages');
@@ -29,11 +25,15 @@ export default function WebCompare() {
         const data = await res.json();
         setPages(data.pages || []);
       }
-    } catch (e) {
+    } catch {
       // Use demo data for development
       setPages(getDemoData());
     }
   }
+
+  useEffect(() => {
+    fetchPages();
+  }, []);
 
   // Toggle page selection for comparison
   const togglePageSelection = useCallback((url) => {
@@ -64,6 +64,7 @@ export default function WebCompare() {
     }
     setIsLoading(false);
     setView('compare');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPages, pages]);
 
   // Generate local comparison from selected pages
@@ -79,7 +80,7 @@ export default function WebCompare() {
     });
 
     const commonTags = Object.entries(allTags)
-      .filter(([_, count]) => count >= 2)
+      .filter(([, count]) => count >= 2)
       .map(([tag, count]) => ({ tag, count }))
       .sort((a, b) => b.count - a.count);
 
@@ -87,7 +88,7 @@ export default function WebCompare() {
       pages: selected,
       commonTags,
       uniqueTags: Object.entries(allTags)
-        .filter(([_, count]) => count === 1)
+        .filter(([, count]) => count === 1)
         .map(([tag]) => tag),
       summary: {
         pageCount: selected.length,

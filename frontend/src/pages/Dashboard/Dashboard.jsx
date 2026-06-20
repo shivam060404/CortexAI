@@ -5,7 +5,7 @@ import './Dashboard.css';
 
 export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {

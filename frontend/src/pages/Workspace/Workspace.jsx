@@ -19,14 +19,15 @@ export default function Workspace() {
   // --- Research State ---
   const [query, setQuery] = useState('');
   const [events, setEvents] = useState([]);
-  const [metrics, setMetrics] = useState(null);
-  const [todos, setTodos] = useState([]);
+  const [, setMetrics] = useState(null);
+  const [, setTodos] = useState([]);
   const [status, setStatus] = useState('idle');
   const eventsEndRef = useRef(null);
   const wsRef = useRef(null);
 
   useEffect(() => {
     refreshSessions();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshSessions = () => {

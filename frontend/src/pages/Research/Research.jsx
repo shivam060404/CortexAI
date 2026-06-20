@@ -7,6 +7,7 @@ import ImageDropzone from '../../components/ImageDropzone/ImageDropzone';
 import LivePlanEditor from '../../components/LivePlanEditor/LivePlanEditor';
 import TaggingSystem from '../../components/TaggingSystem/TaggingSystem';
 import DocumentUploader from '../../components/DocumentUploader/DocumentUploader';
+import ResearchSteps from '../../components/ResearchSteps/ResearchSteps';
 import './Research.css';
 
 // Parse sources from tool results
@@ -25,7 +26,7 @@ function extractSources(events) {
             const hostname = new URL(clean).hostname.replace('www.', '');
             sources.push({ url: clean, domain: hostname, title: hostname });
           }
-        } catch {}
+        } catch { /* invalid URL — skip */ }
       });
     }
   });
@@ -77,7 +78,6 @@ export default function Research() {
   const [todos, setTodos] = useState([]);
   const [status, setStatus] = useState('idle');
   const [finalReport, setFinalReport] = useState('');
-  const [showThinking, setShowThinking] = useState(true);
   const [elapsed, setElapsed] = useState(0);
   const [researchMode, setResearchMode] = useState('deep');
   const [feedbackSent, setFeedbackSent] = useState(false);
@@ -93,14 +93,8 @@ export default function Research() {
   const [attachedFiles, setAttachedFiles] = useState([]);
 
   const timerRef = useRef(null);
-  const eventsEndRef = useRef(null);
   const wsRef = useRef(null);
   const inputRef = useRef(null);
-
-  // Auto scroll thinking panel
-  useEffect(() => {
-    if (showThinking) eventsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [events, showThinking]);
 
   // Timer
   useEffect(() => {
@@ -218,7 +212,6 @@ export default function Research() {
   const currentPhase = getPhase(events, status);
   const toolCallCount = events.filter(e => e.type === 'tool_call').length;
   const searchCount = events.filter(e => e.type === 'tool_call' && e.data?.tool?.includes('search')).length;
-  const thinkingEvents = events.filter(e => ['thinking', 'tool_call', 'tool_result', 'status'].includes(e.type));
   const reportHtml = finalReport ? marked.parse(injectCitations(finalReport, sources)) : '';
   const charts = events.filter(e => e.type === 'chart_data').map(e => e.data);
 
@@ -402,41 +395,12 @@ export default function Research() {
       <div className="research-main">
         {/* Left: Thinking + Report */}
         <div className="research-left">
-          {/* Collapsible Thinking Panel */}
-          <div className="thinking-panel">
-            <button className="thinking-toggle" onClick={() => setShowThinking(!showThinking)}>
-              <span className="thinking-toggle-icon">{showThinking ? '▼' : '▶'}</span>
-              <span>Thinking</span>
-              <span className="thinking-count">{thinkingEvents.length} steps</span>
-            </button>
-            {showThinking && (
-              <div className="thinking-stream">
-                {thinkingEvents.map((ev, i) => (
-                  <div key={i} className={`thinking-step step-${ev.type}`}>
-                    <span className="step-icon">
-                      {ev.type === 'thinking' ? '💭' : ev.type === 'tool_call' ? '🔧' : ev.type === 'tool_result' ? '📥' : '📡'}
-                    </span>
-                    <div className="step-content">
-                      {ev.type === 'thinking' && <span className="step-text">{ev.data.message}</span>}
-                      {ev.type === 'tool_call' && (
-                        <span className="step-text">
-                          <strong>{ev.data.tool}</strong>
-                          {ev.data.input?.query && <span className="step-query"> — "{ev.data.input.query}"</span>}
-                        </span>
-                      )}
-                      {ev.type === 'tool_result' && (
-                        <span className="step-text step-result-text">
-                          <strong>{ev.data.tool}</strong> returned {ev.data.result?.length || 0} chars
-                        </span>
-                      )}
-                      {ev.type === 'status' && <span className="step-text">{ev.data.message}</span>}
-                    </div>
-                  </div>
-                ))}
-                <div ref={eventsEndRef} />
-              </div>
-            )}
-          </div>
+          {/* Perplexity-style Research Steps */}
+          <ResearchSteps
+            events={events}
+            isRunning={status === 'running'}
+            defaultExpanded={true}
+          />
 
           {/* Research Plan (Todos) */}
           {todos.length > 0 && (

@@ -4,7 +4,7 @@ Research Loop Tools — explicit tools for recursive hypothesis generation and e
 
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from backend.config import settings
 from backend.core.logger import get_logger
 

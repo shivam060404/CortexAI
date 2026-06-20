@@ -15,7 +15,22 @@ export default function History() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadSessions(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const loadSessionsAsync = async () => {
+      setLoading(true);
+      try {
+        const data = await listSessions();
+        if (!cancelled) setSessions(data.sessions || []);
+      } catch {
+        if (!cancelled) setSessions([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    loadSessionsAsync();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleDelete = async (e, id) => {
     e.stopPropagation();

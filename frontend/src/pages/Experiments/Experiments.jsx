@@ -22,13 +22,22 @@ export default function Experiments() {
 
   useEffect(() => {
     if (!selectedSessionId) return;
-    setLoading(true);
-    fetch(`/api/sessions/${selectedSessionId}/experiments`)
-      .then(res => res.json())
-      .then(data => {
-        setExperiments(data.experiments || []);
-        setLoading(false);
-      });
+    let cancelled = false;
+    const fetchExperiments = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/sessions/${selectedSessionId}/experiments`);
+        const data = await res.json();
+        if (!cancelled) {
+          setExperiments(data.experiments || []);
+          setLoading(false);
+        }
+      } catch {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchExperiments();
+    return () => { cancelled = true; };
   }, [selectedSessionId]);
 
   return (

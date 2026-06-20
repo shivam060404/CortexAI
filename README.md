@@ -1,6 +1,6 @@
-# CortexAI — Autonomous Deep Research Agent Platform (v5.0)
+# CortexAI — Autonomous Deep Research Agent Platform (v6.0)
 
-> A production-grade, enterprise-ready autonomous research agent with multi-tenant architecture, SOC2 compliance, real-time collaboration, and a unified Agent Harness framework. Plans, searches, analyzes, debates, reflects, and generates comprehensive reports — all in real-time.
+> A production-grade, enterprise-ready autonomous research agent with multi-modal document ingestion, Perplexity-style agent trace UI, multi-tenant architecture, SOC2 compliance, real-time collaboration, and a unified Agent Harness framework. Plans, searches, analyzes, debates, reflects, and generates comprehensive reports — all in real-time.
 
 ---
 
@@ -12,6 +12,8 @@ CortexAI is an advanced research assistant powered by a central **Context Graph 
 
 | Feature | Description |
 |---------|-------------|
+| 📎 **Multi-Modal Ingestion** | Upload PDF, DOCX, Markdown, TXT, CSV, and images. Documents are parsed, chunked, and ingested into the RAG pipeline. Images are analyzed via Groq Vision (Llama-3.2-Vision). |
+| 🧭 **Agent Trace UI** | Perplexity-style numbered research steps timeline with expandable details, per-step sources with favicons, tool parameters, result previews, and duration tracking. All traces persisted to Postgres. |
 | 🧠 **Dynamic Planning & HITL** | Agent creates tasks via `write_todos`. **Human-in-the-loop** (HITL) gates allow you to pause, review, and modify the plan mid-flight. |
 | 🔌 **MCP Protocol Architecture** | Tools are isolated into standalone Model Context Protocol (MCP) servers with hot-reload support and a custom tool registry. |
 | 🌐 **Chrome Extension** | Context injector extension to tag and save active webpages directly into the agent's long-term memory. |
@@ -19,13 +21,13 @@ CortexAI is an advanced research assistant powered by a central **Context Graph 
 | ⚔️ **Multi-Agent Debate** | Defender vs. Skeptic debate engine eliminates confirmation bias over multiple rounds. |
 | 🔬 **Self-Reflection** | Agent critically evaluates its own research (completeness, bias, evidence quality) before finalizing. |
 | 🧪 **Python Execution Sandbox** | Secure, resource-limited subprocess with memory caps, CPU limits, and timeout enforcement. |
-| 📊 **Advanced Search Engine** | Parallel orchestration of **Tavily**, **Exa**, and **Firecrawl** with hybrid BM25+semantic RAG pipeline. |
+| 📊 **Advanced Search Engine** | Parallel orchestration of **Tavily**, **Exa**, and **Firecrawl** with hybrid BM25+semantic RAG pipeline. Batch mode (parallel + dedup + priority) and Deep mode (iterative deepening with auto follow-ups). |
 | 🧩 **GraphRAG Knowledge** | LanceDB-backed persistent fact storage with hybrid search (BM25 + vector similarity) and reciprocal rank fusion. |
 | 📋 **Multi-Format Exports** | Converts reports into PowerPoint, PDF (WeasyPrint), DOCX (python-docx), and interactive HTML files. |
-| 🛡️ **3-Layer Security & ML** | ML-based prompt injection classifier, Tool Output Guards, and LLM Output Guards (OWASP LLM Top 10 protected). |
+| 🛡️ **3-Layer Security & ML** | ML-based prompt injection classifier (heuristic + HuggingFace transformers), Tool Output Guards, and LLM Output Guards (OWASP LLM Top 10 protected). |
 | 🔐 **PII Redaction & Citations** | Automatic masking of emails, SSNs, credit cards. Flags hallucinated URLs with citation verification. |
 | ⚡ **Rate Limiter & Guards** | API rate-limiting via Token Bucket, per-key rate limits, max iterations, tokens, and timeout circuit breakers. |
-| 📊 **Phoenix Observability** | Arize Phoenix OpenTelemetry traces with custom spans for supervisor phases, tool calls, and sub-agents. |
+| 📊 **Phoenix Observability** | Arize Phoenix OpenTelemetry traces with custom spans for supervisor phases, tool calls, and sub-agents. Agent traces persisted to Postgres with latency tracking. |
 | 🎯 **RLHF Alignment** | Query refinement, research mode selection, preference learning with exponential decay and confidence thresholds. |
 | 🏢 **Multi-Tenant & Orgs** | Organization model with role-based access (owner/admin/member/viewer), RLS tenant isolation, and org-scoped queries. |
 | 🔑 **API Key Management** | Multi-key support per user with scopes, rotation grace periods, expiry, and last-used tracking. |
@@ -35,6 +37,11 @@ CortexAI is an advanced research assistant powered by a central **Context Graph 
 | 🛡️ **Content Policy Engine** | Per-organization content policies with tiered approval modes: auto, supervised, and locked. |
 | 🔧 **Custom Tool Registry** | Dynamic tool registration from MCP servers, capability discovery, validation, and per-org allowlists. |
 | 🏗️ **Agent Harness Framework** | Unified 5-pillar configuration (Tool Orchestration, Context Compaction, Task Delegation, Guardrails, Observability) with health checks and scoring. |
+| 🔐 **Enterprise SSO/OIDC** | Generic OIDC provider support with PKCE, JIT user provisioning, group→role mapping, and SSO login/callback/logout endpoints. |
+| 🗄️ **Secrets Manager** | Pluggable secrets backend supporting HashiCorp Vault, AWS Secrets Manager, and `.env` fallback with caching and rotation detection. |
+| 🔮 **Predictive Planner** | Predicts upcoming research topics, detects knowledge gaps, and generates structured research plans with priority scoring. |
+| 🎨 **Visual Workflow Builder** | Drag-and-drop DAG editor with 8 node types (Search, Analyze, Synthesize, Export, etc.), SVG edges, and topological execution. |
+| 📑 **Web Compare & Tag** | Multi-page comparison from Chrome extension, auto-tagging, diff highlighting, and side-by-side content analysis. |
 
 ---
 
@@ -43,8 +50,10 @@ CortexAI is an advanced research assistant powered by a central **Context Graph 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         Frontend (React + Vite)                             │
-│  Dashboard │ Research Lab (Image Dropzone, Plan Editor, Tagging)            │
-│  Observability │ Knowledge Graph │ Settings │ Chrome Extension              │
+│  Dashboard │ Research Lab (Image Dropzone, Plan Editor, Tagging,        │
+│  Document Uploader, Research Steps Timeline)                             │
+│  Workflow Builder │ Web Compare │ Observability │ Knowledge Graph        │
+│  Settings │ Chrome Extension                                            │
 └──────────────────────────────┬──────────────────────────────────────────────┘
                                │ REST + WebSocket (Duplex HITL + Broadcasting)
 ┌──────────────────────────────▼──────────────────────────────────────────────┐
@@ -81,9 +90,15 @@ CortexAI is an advanced research assistant powered by a central **Context Graph 
 │  │ 1. Search Server  2. Browser Server  3. Data Server  4. Export    │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                             │
+│  ┌─── Multi-Modal Pipeline ──────────────────────────────────────────┐    │
+│  │ Document Parser (PDF, DOCX, MD, TXT, CSV, Images)                  │    │
+│  │ RAG Ingestion (chunking + LanceDB) │ Vision Analysis (Groq)       │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
 │  ┌─── Enterprise Layer ───────────────────────────────────────────────┐    │
 │  │ Multi-Tenant (RLS) │ Organizations │ API Key Management            │    │
 │  │ Report Sharing │ Real-Time Collaboration │ SOC2 Audit Logging      │    │
+│  │ Enterprise SSO/OIDC │ Secrets Manager (Vault/AWS/Env)              │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                             │
 │  ┌─── Storage Layer ──────────────────────────────────────────────────┐    │
@@ -176,13 +191,30 @@ This will spin up:
 | `PUT` | `/api/sessions/{id}/collaborate/role` | Update participant role |
 | `GET` | `/api/collaboration/active` | Active connections |
 
-### Analytics & Observability
+### Document Ingestion
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/api/upload` | Upload single document (PDF, DOCX, MD, TXT, CSV, image) |
+| `POST` | `/api/upload/batch` | Upload multiple documents for batch RAG ingestion |
+
+### Agent Traces & Observability
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/sessions/{id}/traces` | Get agent trace timeline (tool calls, latency, errors) |
 | `GET` | `/api/analytics/usage` | Usage stats over time |
 | `GET` | `/api/analytics/costs` | Per-session cost breakdown |
 | `GET` | `/api/analytics/performance` | Latency & success rates |
+
+### Enterprise SSO
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/auth/sso/login` | Initiate OIDC login flow |
+| `GET` | `/api/auth/sso/callback` | OIDC callback handler |
+| `GET` | `/api/auth/sso/discover` | OIDC provider discovery |
+| `POST` | `/api/auth/sso/logout` | SSO logout |
 
 ### SOC2 Audit
 
@@ -214,7 +246,7 @@ This will spin up:
 
 | Layer | Component | Protection |
 |-------|-----------|------------|
-| **Layer 1** | `MLClassifier` | Heuristic/ML engine to block jailbreaks (DAN, prompt extraction) |
+| **Layer 1** | `MLClassifier` | Dual-mode (heuristic + HuggingFace transformers) to block jailbreaks (DAN, prompt extraction) |
 | **Layer 2** | `Tool Output Guard` | Sanitizes poisoned web content from search results mid-loop |
 | **Layer 3** | `LLM Output Guard` | Moderates LLM responses (weapons, hacking, self-harm) |
 | **Content Policy** | `ContentPolicyEngine` | Per-org tiered approval: auto, supervised, locked |
@@ -222,6 +254,8 @@ This will spin up:
 | **Citations** | `verify_citations()` | Flags URLs the LLM never actually accessed |
 | **Rate Limit** | `rate_limit_middleware` | Token bucket + per-key rate limits (default: 60 req/min) |
 | **Request Size** | `RequestBodyLimitMiddleware` | Configurable max body size (default 10MB) |
+| **Secrets** | `SecretsManager` | Pluggable backends: HashiCorp Vault, AWS Secrets Manager, `.env` fallback with caching |
+| **SSO** | `EnterpriseSSO` | Generic OIDC with PKCE, JIT provisioning, group→role mapping |
 | **Audit** | `AuditLogger` | SOC2-compliant data access & config change logging |
 
 ---
@@ -247,6 +281,37 @@ The Agent Harness provides a unified configuration and health monitoring framewo
 | ⚡ **Fast** | Overview | 3-5 | Quick focused summary |
 | 🧠 **Deep** | Comprehensive | 15-20 | Multi-angle, contrasting viewpoints |
 | 🔬 **Academic** | Scholarly | 25-30 | Peer-reviewed papers, formal citations |
+
+---
+
+## 📎 Multi-Modal Document Ingestion
+
+CortexAI accepts multi-format document uploads as research input sources:
+
+| Format | Parser | Output |
+|--------|--------|--------|
+| **PDF** | PyPDF2 | Full text extraction with page tracking |
+| **DOCX** | python-docx | Paragraph + table extraction |
+| **Markdown** | Custom parser | Raw markdown with metadata |
+| **TXT** | Direct read | Plain text |
+| **CSV** | csv module | Structured table data |
+| **Images** | Groq Vision (Llama-3.2-Vision) | Base64 + vision analysis |
+
+Uploaded text documents are automatically chunked and ingested into the LanceDB RAG pipeline for retrieval-augmented generation during research. Images are analyzed by the vision model and injected as context into the agent's reasoning.
+
+---
+
+## 🧭 Agent Trace UI
+
+The Research page features a **Perplexity-style numbered step timeline** that shows every action the agents take:
+
+- **Numbered steps** with status indicators (running spinner, complete checkmark)
+- **20+ tool icons** (🔍 search, 🌐 scrape, 📚 arxiv, 📝 write, 🪞 reflect, 🤖 subagent, etc.)
+- **Expandable details** per step: search query, tool parameters, result preview
+- **Per-step sources** with Google favicons and domain labels
+- **Duration tracking** showing step latency in seconds
+- **Live indicator** with pulsing badge while research is running
+- **All traces persisted** to Postgres `agent_traces` table for post-session review on the Observability page
 
 ---
 

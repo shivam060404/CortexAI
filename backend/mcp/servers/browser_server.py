@@ -281,7 +281,7 @@ class BrowserMCPServer:
 
         try:
             from browser_use import Agent as BrowserAgent
-            from langchain_community.chat_models import ChatLiteLLM
+            from langchain_litellm import ChatLiteLLM
 
             llm = ChatLiteLLM(
                 model=os.getenv("FAST_MODEL", "groq/llama3-8b-8192"),

@@ -5,7 +5,7 @@ The agent uses this to critically review its own work before presenting results.
 
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from backend.config import settings
 from backend.core.logger import get_logger
 

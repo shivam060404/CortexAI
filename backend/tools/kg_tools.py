@@ -7,7 +7,7 @@ import json
 import uuid
 from langchain_core.tools import tool
 from sqlalchemy import select
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from langchain_core.messages import SystemMessage, HumanMessage
 from backend.db.postgres import async_session, KnowledgeNode, KnowledgeEdge
 from backend.db.lancedb_store import LanceDBStore

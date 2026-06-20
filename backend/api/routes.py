@@ -1790,6 +1790,52 @@ async def websocket_research(websocket: WebSocket, session_id: str):
         last_supervisor_phase = None
         sent_supervisor_event_count = 0
 
+        # ─── Trace persistence for Observability ───
+        _tool_start_times: dict[str, float] = {}
+        _tool_trace_ids: dict[str, uuid.UUID] = {}
+        _session_uuid = uuid.UUID(session_id)
+
+        async def _persist_trace(
+            event_type: str,
+            tool_name: str = "",
+            input_data: dict | None = None,
+            output_data: dict | None = None,
+            latency_ms: float = 0,
+            tokens_used: int = 0,
+            is_error: bool = False,
+            error_detail: str = "",
+            trace_id: uuid.UUID | None = None,
+        ):
+            """Persist an AgentTrace record to Postgres."""
+            try:
+                async with async_session() as db:
+                    if trace_id:
+                        existing = await db.get(AgentTrace, trace_id)
+                        if existing:
+                            existing.output_data = output_data or {}
+                            existing.latency_ms = latency_ms
+                            if is_error:
+                                existing.is_error = True
+                                existing.error_detail = error_detail
+                            await db.commit()
+                            return
+                    trace = AgentTrace(
+                        id=trace_id or uuid.uuid4(),
+                        session_id=_session_uuid,
+                        event_type=event_type,
+                        tool_name=tool_name,
+                        input_data=input_data or {},
+                        output_data=output_data or {},
+                        latency_ms=latency_ms,
+                        tokens_used=tokens_used,
+                        is_error=is_error,
+                        error_detail=error_detail,
+                    )
+                    db.add(trace)
+                    await db.commit()
+            except Exception as e:
+                logger.warning("trace_persist_error", error=str(e), event_type=event_type)
+
         async for event in graph.astream_events(
             initial_state,
             {"configurable": {"thread_id": session_id}},
@@ -1811,12 +1857,21 @@ async def websocket_research(websocket: WebSocket, session_id: str):
                 )
                 for supervisor_message in supervisor_messages:
                     await websocket.send_json(supervisor_message)
+                    # Persist supervisor phase as trace
+                    _sm_type = supervisor_message.get("type", "")
+                    _sm_data = supervisor_message.get("data", {})
+                    if _sm_type in ("thinking", "status"):
+                        await _persist_trace(
+                            "agent_iteration",
+                            input_data={"phase": last_supervisor_phase or "", **_sm_data},
+                        )
 
                 if HITLManager.is_paused(session_id) and event_type == "on_chain_start" and event_name == "agent_node":
                     await websocket.send_json({"type": "hitl_pause", "data": {"checkpoint_type": "checkpoint", "data": {}}})
 
                 if event_type == "on_chat_model_start":
                     await websocket.send_json({"type": "thinking", "data": {"message": "Analyzing and reasoning..."}})
+                    await _persist_trace("agent_iteration", input_data={"message": "Analyzing and reasoning..."})
                 elif event_type == "on_chat_model_end":
                     model_output = event.get("data", {}).get("output")
                     if model_output:
@@ -1824,14 +1879,24 @@ async def websocket_research(websocket: WebSocket, session_id: str):
                         tool_calls = getattr(model_output, "tool_calls", [])
                         if tool_calls:
                             for tool_call in tool_calls:
+                                _t_name = tool_call.get("name", "")
+                                _t_args = tool_call.get("args", {})
                                 await websocket.send_json(
                                     {
                                         "type": "tool_call",
                                         "data": {
-                                            "tool": tool_call.get("name", ""),
-                                            "input": tool_call.get("args", {}),
+                                            "tool": _t_name,
+                                            "input": _t_args,
                                         },
                                     }
+                                )
+                                # Persist tool_call trace
+                                _trace_id = uuid.uuid4()
+                                _tool_start_times[_t_name] = time.time()
+                                _tool_trace_ids[_t_name] = _trace_id
+                                await _persist_trace(
+                                    "tool_call", tool_name=_t_name,
+                                    input_data=_t_args, trace_id=_trace_id,
                                 )
                         elif content:
                             output_scan = scan_llm_output(content)
@@ -1849,6 +1914,15 @@ async def websocket_research(websocket: WebSocket, session_id: str):
                             "type": "tool_result",
                             "data": {"tool": event_name, "result": content[:2000]},
                         }
+                    )
+                    # Update persisted trace with result + latency
+                    _start = _tool_start_times.pop(event_name, None)
+                    _latency = (time.time() - _start) * 1000 if _start else 0
+                    _tid = _tool_trace_ids.pop(event_name, None)
+                    await _persist_trace(
+                        "tool_call", tool_name=event_name,
+                        output_data={"result": content[:2000]},
+                        latency_ms=_latency, trace_id=_tid,
                     )
                     if event_name in ("write_todos", "get_todos"):
                         await websocket.send_json(

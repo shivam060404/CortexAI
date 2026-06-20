@@ -5,16 +5,22 @@ const EVENT_ICONS = {
   agent_iteration: '🧠',
   tool_call: '🔧',
   tool_blocked: '🚫',
+  tool_result: '📥',
   llm_error: '⚠️',
   limit_exceeded: '🛑',
+  subagent_spawn: '🤖',
+  error: '❌',
 };
 
 const EVENT_COLORS = {
   agent_iteration: 'var(--accent-primary)',
-  tool_call: 'var(--info)',
-  tool_blocked: 'var(--error)',
-  llm_error: 'var(--warning)',
-  limit_exceeded: 'var(--error)',
+  tool_call: 'var(--info, #3b82f6)',
+  tool_blocked: 'var(--error, #ef4444)',
+  tool_result: 'var(--success, #22c55e)',
+  llm_error: 'var(--warning, #f59e0b)',
+  limit_exceeded: 'var(--error, #ef4444)',
+  subagent_spawn: '#8b5cf6',
+  error: 'var(--error, #ef4444)',
 };
 
 export default function Observability() {
@@ -35,11 +41,15 @@ export default function Observability() {
       .catch(() => setSessions([]));
   }, []);
 
+  // Fetch traces when session changes
   useEffect(() => {
     if (!selectedSession) return;
-    setLoading(true);
-    getSessionTraces(selectedSession)
-      .then(data => {
+    let cancelled = false;
+    const fetchTraces = async () => {
+      setLoading(true);
+      try {
+        const data = await getSessionTraces(selectedSession);
+        if (cancelled) return;
         const t = data.traces || [];
         setTraces(t);
         setStats({
@@ -48,9 +58,14 @@ export default function Observability() {
           errors: t.filter(tr => tr.is_error).length,
           toolCalls: t.filter(tr => tr.event_type === 'tool_call').length,
         });
-      })
-      .catch(() => setTraces([]))
-      .finally(() => setLoading(false));
+      } catch {
+        if (!cancelled) setTraces([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchTraces();
+    return () => { cancelled = true; };
   }, [selectedSession]);
 
   return (
@@ -189,6 +204,18 @@ export default function Observability() {
                   {t.is_error && t.error_detail && (
                     <div style={{ fontSize: '0.78rem', color: 'var(--error)', marginTop: 2 }}>
                       {t.error_detail.slice(0, 200)}
+                    </div>
+                  )}
+                  {/* Show tool input if present */}
+                  {!t.is_error && t.input_data && Object.keys(t.input_data).length > 0 && (
+                    <div style={{
+                      fontSize: '0.72rem', color: 'var(--text-muted)',
+                      fontFamily: 'var(--font-mono)', marginTop: 4,
+                      background: 'var(--bg-tertiary)', padding: '3px 8px',
+                      borderRadius: 4, maxHeight: 60, overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {t.input_data.query || t.input_data.message || JSON.stringify(t.input_data).slice(0, 120)}
                     </div>
                   )}
                 </div>

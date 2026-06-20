@@ -6,7 +6,7 @@ All calls are fully async to prevent blocking the FastAPI event loop.
 
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from backend.config import settings
 from backend.core.logger import get_logger
 

@@ -21,6 +21,7 @@ langchain-core
 langchain-mistralai
 langchain-tavily
 langchain-community
+langchain-litellm
 litellm
 langgraph
 

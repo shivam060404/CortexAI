@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import './Workflow.css';
 
 // =============================================================================
@@ -165,7 +165,7 @@ export default function Workflow() {
           setEdges(data.edges);
           if (data.name) setWorkflowName(data.name);
         }
-      } catch (err) { alert('Invalid workflow file'); }
+      } catch { alert('Invalid workflow file'); }
     };
     reader.readAsText(file);
   }, []);
@@ -393,7 +393,7 @@ function topologicalSort(nodes, edges) {
     if (graph.has(e.from)) graph.get(e.from).push(e.to);
     if (inDegree.has(e.to)) inDegree.set(e.to, inDegree.get(e.to) + 1);
   });
-  const queue = [...inDegree.entries()].filter(([_, d]) => d === 0).map(([id]) => id);
+  const queue = [...inDegree.entries()].filter(([, d]) => d === 0).map(([id]) => id);
   const sorted = [];
   while (queue.length) {
     const id = queue.shift();
